@@ -189,6 +189,17 @@ class NotesVaultDavView(HomeAssistantView):
         return await self.hass.async_add_executor_job(lambda: func(*args, **kwargs))
 
     async def _handle(self, request: web.Request) -> web.StreamResponse:
+        response = await self._handle_inner(request)
+        _LOGGER.debug(
+            "%s /%s (Depth %s) -> %s",
+            request.method,
+            request.match_info.get("path", ""),
+            request.headers.get("Depth", "-"),
+            response.status,
+        )
+        return response
+
+    async def _handle_inner(self, request: web.Request) -> web.StreamResponse:
         manager = active_manager(self.hass)
         if manager is None:
             return web.Response(status=404)
