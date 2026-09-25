@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import (
     area_registry as ar,
@@ -114,6 +115,7 @@ async def home(hass: HomeAssistant) -> dict:
         device_id=device.id,
         config_entry=source,
         entity_category=EntityCategory.DIAGNOSTIC,
+        original_device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         suggested_object_id="kitchen_ceiling_rssi",
     )
     hass.states.async_set(light.entity_id, "on", {"friendly_name": "Ceiling lamp"})

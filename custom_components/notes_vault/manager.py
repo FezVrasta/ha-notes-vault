@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+import yaml
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -146,6 +147,23 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _plain(value: Any) -> Any:
+    """Reduce a value to types the YAML safe dumper accepts.
+
+    Enums and other str subclasses (entity names are often one) are refused by
+    `yaml.safe_dump`, and state attributes can hold anything.
+    """
+    if value is None or type(value) in (str, int, float, bool):
+        return value
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    return str(value)
+
+
 def _stem_matches(stem: str, base: str) -> bool:
     """Return whether an existing file name still fits the object's name."""
     return (
@@ -159,12 +177,12 @@ def merge_frontmatter(
 ) -> dict[str, Any]:
     """Merge the generated keys into a note's frontmatter, keeping the user's keys."""
     merged: dict[str, Any] = {
-        key: value
+        key: _plain(value)
         for key, value in doc.managed.items()
         if value is not None and value not in ([], "")
     }
     aliases = [a for a in _as_list(current.get("aliases")) if a != previous_name]
-    for alias in doc.aliases:
+    for alias in map(_plain, doc.aliases):
         if alias not in aliases:
             aliases.append(alias)
     if aliases:
@@ -547,6 +565,32 @@ class NotesVault:
             return None, None
         return self.vault.read_note(path), info.mtime
 
+    def _write_doc(self, key: DocKey, doc: Doc, path: str) -> str:
+        """Write one note's frontmatter if it changed. Return the stats bucket."""
+        cached = self._written.get(key)
+        try:
+            mtime: float | None = self.vault.stat(path).mtime
+        except NotFoundError:
+            mtime = None
+        note: Note | None = None
+        if cached and mtime is not None and cached[0] == mtime:
+            current_fm = cached[1]
+        else:
+            note = self.vault.read_note(path) if mtime is not None else None
+            current_fm = note.frontmatter if note else {}
+            if note and not note.valid:
+                _LOGGER.warning("Skipping %s: its frontmatter is not valid YAML", path)
+                return "unchanged"
+        merged = merge_frontmatter(current_fm, doc, current_fm.get("name"))
+        if mtime is not None and merged == current_fm:
+            return "unchanged"
+        if note is None and mtime is not None:
+            note = self.vault.read_note(path)
+        body = note.body if note else ""
+        created = self.vault.write_text(path, render_note(merged, body))
+        self._written[key] = (self.vault.stat(path).mtime, merged)
+        return "created" if created else "updated"
+
     def _apply(self, docs: dict[DocKey, Doc]) -> dict[str, int]:
         """Bring the files on disk in line with the docs. Runs in the executor."""
         stats = {"created": 0, "updated": 0, "renamed": 0, "deleted": 0, "unchanged": 0}
@@ -591,32 +635,11 @@ class NotesVault:
                     paths[key] = old
             self.index[key] = path
 
-            cached = self._written.get(key)
             try:
-                mtime = self.vault.stat(path).mtime
-            except NotFoundError:
-                mtime = None
-            if cached and mtime is not None and cached[0] == mtime:
-                current_fm = cached[1]
-                note = None
-            else:
-                note = self.vault.read_note(path) if mtime is not None else None
-                current_fm = note.frontmatter if note else {}
-                if note and not note.valid:
-                    _LOGGER.warning(
-                        "Skipping %s: its frontmatter is not valid YAML", path
-                    )
-                    continue
-            merged = merge_frontmatter(current_fm, doc, current_fm.get("name"))
-            if mtime is not None and merged == current_fm:
-                stats["unchanged"] += 1
-                continue
-            if note is None and mtime is not None:
-                note = self.vault.read_note(path)
-            body = note.body if note else ""
-            created = self.vault.write_text(path, render_note(merged, body))
-            self._written[key] = (self.vault.stat(path).mtime, merged)
-            stats["created" if created else "updated"] += 1
+                stats[self._write_doc(key, doc, path)] += 1
+            except (OSError, VaultError, yaml.YAMLError):
+                # One unwritable note must not stop the rest of the vault.
+                _LOGGER.exception("Could not update %s", path)
 
         # Objects that no longer exist in Home Assistant.
         for key in [k for k in self.index if k not in docs]:

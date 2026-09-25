@@ -154,3 +154,19 @@ async def test_removed_entity(
     device = _read(vault_dir, f"{DEVICES}/Ceiling lamp.md")
     assert device.frontmatter["ha_removed"] is True
     assert device.body == "Warranty until 2028.\n"
+
+
+async def test_str_subclass_names_are_plain(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A state-only entity whose name is a str subclass still gets a note."""
+
+    class Name(str):
+        """Stand-in for the str subclasses integrations put in states."""
+
+        __slots__ = ()
+
+    hass.states.async_set("sensor.odd", "1", {"friendly_name": Name("Odd one")})
+    await manager.async_sync()
+    fm = _read(vault_dir, f"{ENTITIES}/sensor.odd.md").frontmatter
+    assert fm["aliases"] == ["Odd one"]
