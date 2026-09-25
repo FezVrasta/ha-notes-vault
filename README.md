@@ -32,10 +32,15 @@ Notes Vault keeps a folder of Markdown files inside your Home Assistant config d
 
 ## What you get
 
+<p align="center">
+  <img src="docs/images/panel.png" alt="The Notes panel in Home Assistant. On the left, the vault as a tree: the user's own Home folder with Electrical panel and Network, then the generated Areas. On the right, the Heat pump note with its location, purchase details, maintenance log and quirks, linking to the Ecobee thermostat, the outside temperature sensor and the energy contract, with a Go to device button and the notes that link to it underneath.">
+  <br><em>The Notes panel: every note in the vault, with the ones linking to it.</em>
+</p>
+
 <table>
   <tr>
-    <td width="60%"><img src="docs/images/device-page.png" alt="A Home Assistant device page for Bed Light with a Notes card under Device info. The note says the bulb was swapped for a warm 2700K one, with a link to light.bed_light and a mention of the Bedroom."></td>
-    <td width="40%"><img src="docs/images/more-info.png" alt="The more-info dialog of the Bed Light entity, with a Notes section at the bottom showing the path of the note in the vault and its text."></td>
+    <td width="60%"><img src="docs/images/device-page.png" alt="The Heat pump device page in Home Assistant with a Notes card under Device info, showing where the unit is and its purchase and warranty details, with links to the Garden area and the Yearly maintenance note."></td>
+    <td width="40%"><img src="docs/images/more-info.png" alt="The more-info dialog of the Outside Temperature sensor, with a Notes section under the history graph saying it feeds the weather curve of the Heat pump, which is a link."></td>
   </tr>
   <tr>
     <td><em>A Notes card on every device and area page.</em></td>
@@ -159,6 +164,10 @@ Obsidian-side MCP servers such as [mcp-obsidian](https://github.com/MarkusPfunds
 Every generated note starts out holding its template, so opening `Kitchen.md` in Obsidian gives you the headings to fill in. A note whose body is still exactly its template counts as empty: Home Assistant shows **No notes yet**, filters can remove it, and it's deleted along with its entity. The moment you write in it, it's yours. Edit a template and every note still holding the old one is updated to match, and none of the others.
 
 In Home Assistant, **Add note** starts from the same template, and a **Template** dropdown switches to another one or to a blank note.
+
+<p align="center">
+  <img src="docs/images/template.png" width="420" alt="Starting a note on the Ceiling Lights entity: the Template dropdown is set to Light, and the editor holds its headings: Fixture with bulb, socket, wattage, wall switch and circuit breaker, then Replacement log and Quirks.">
+</p>
 
 Templates are Markdown files in `Home Assistant/Templates/`, so you edit them in Obsidian like any other note (and Obsidian's own Templates plugin can use the same folder). The defaults cover the common cases:
 
