@@ -128,6 +128,18 @@ type DocKey = tuple[str, str]
 type Plan = tuple[Template, dict[str, Any]]
 
 
+def _all_devices(dev_reg: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
+    """List every device without the mapping access 2026.9 deprecated.
+
+    From 2026.9, iterating `devices` yields the entries and `.values()` is reported
+    as deprecated; before that, iterating it yields device IDs.
+    """
+    return [
+        item if isinstance(item, dr.DeviceEntry) else dev_reg.devices[item]
+        for item in dev_reg.devices
+    ]
+
+
 def _digest(text: str) -> str:
     return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
 
@@ -475,7 +487,7 @@ class NotesVault:
             }
             docs[doc.key] = doc
 
-        for device in dev_reg.devices.values():
+        for device in _all_devices(dev_reg):
             name = device.name_by_user or device.name or device.model or device.id
             integrations = sorted(
                 {

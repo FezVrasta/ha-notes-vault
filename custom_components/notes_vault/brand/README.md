@@ -47,11 +47,7 @@ Both need `rsvg-convert` (`brew install librsvg`).
 
 ## The tile shape
 
-A **squircle** — a superellipse with exponent 5, so the curvature eases into the straight
-edges rather than meeting them at a tangent the way a rounded rectangle's circular arcs
-do. That is the difference between an iOS app icon and a CSS `border-radius`, and it is
-visible at 256px once you know to look. `squircle()` in `tools/make_icon.py` emits the
-path; it takes the exponent as an argument if you want a boxier or rounder tile.
+A **squircle**: a rounded rectangle with continuous curvature, the shape `UIBezierPath(roundedRect:cornerRadius:)` produces and Figma exposes as "corner smoothing". The edges are dead straight and each corner eases its curvature in over a longer run than a circular arc, so there's no visible join the way there is with a CSS `border-radius`. It is not a superellipse: that curves continuously everywhere, so the edges that should be flat bow outward and the tile reads as pillowed next to a real app icon. `squircle()` in `tools/make_icon.py` emits the path from two numbers, `CORNER_RADIUS_RATIO = 0.2237` and `CORNER_SMOOTHING = 0.6`.
 
 It is drawn full-bleed, inscribed in the whole 1024 artboard rather than inset, because
 that is how an app icon fills its mask.
