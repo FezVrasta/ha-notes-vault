@@ -85,6 +85,22 @@ async def test_defaults_are_seeded_once(
     assert not (folder / "Light.md").exists()
 
 
+async def test_new_default_templates_reach_existing_vaults(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path, hass_storage
+) -> None:
+    """A default added in an update is written; ones seeded before are left alone."""
+    folder = vault_dir / TEMPLATES
+    (folder / "Scene.md").unlink()
+    (folder / "Light.md").unlink()
+    # As if Scene shipped after this vault was seeded.
+    hass_storage["notes_vault.templates"]["data"]["seeded"].remove("Scene")
+    manager._templates_store._data = None
+    await manager.async_stop()
+    await manager.async_start()
+    assert (folder / "Scene.md").exists()
+    assert not (folder / "Light.md").exists()
+
+
 async def test_best_template_for_each_kind(
     hass: HomeAssistant, home: dict, manager: NotesVault
 ) -> None:

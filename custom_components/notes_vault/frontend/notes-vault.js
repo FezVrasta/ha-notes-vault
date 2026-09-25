@@ -2,8 +2,9 @@
  * Notes Vault frontend.
  *
  * One note editor, `notes-vault-note`, used everywhere: in the more-info dialog of
- * every entity, as a card on device and area pages, in `custom:notes-vault-card`, and
- * in the Notes panel in the sidebar, which lists every note in the vault.
+ * every entity, as a card on device and area pages, in the automation, script and
+ * scene editors, in `custom:notes-vault-card`, and in the Notes panel in the
+ * sidebar, which lists every note in the vault.
  *
  * Home Assistant has no extension point for the dialog or the device and area pages,
  * so the editor is appended to the frontend's own DOM there. Every lookup is
@@ -628,8 +629,9 @@ class NotesVaultPanel extends HTMLElement {
     this._folder = path ? null : folder || null;
     this._form = null;
     this._confirmDelete = false;
-    // Reveal the selection in the tree.
-    const target = path ? parentOf(path) : folder || "";
+    // Reveal the selection in the tree: open its parents, not the folder itself,
+    // which the user toggles.
+    const target = parentOf(path || folder || "");
     const parts = target ? target.split("/") : [];
     parts.forEach((_p, i) => this._expanded.add(parts.slice(0, i + 1).join("/")));
     this._renderMain();
@@ -901,11 +903,8 @@ class NotesVaultPanel extends HTMLElement {
     } else if (action === "back") {
       this._go({});
     } else if (folder !== undefined) {
-      this._confirmDelete = false;
-      if (this._folder === folder || !this._expanded.has(folder)) {
-        if (this._expanded.has(folder) && this._folder === folder) this._expanded.delete(folder);
-        else this._expanded.add(folder);
-      }
+      if (this._expanded.has(folder)) this._expanded.delete(folder);
+      else this._expanded.add(folder);
       try {
         localStorage.setItem("notes-vault-expanded", JSON.stringify([...this._expanded]));
       } catch (err) {
@@ -1042,11 +1041,12 @@ const deepFind = (root, selector, maxNodes = 4000) => {
   return null;
 };
 
-const ensureNote = (container, before, target, variant) => {
+const ensureNote = (container, before, target, variant, style) => {
   let note = container.querySelector(":scope > notes-vault-note");
   if (!note) {
     note = document.createElement("notes-vault-note");
     note.setAttribute("variant", variant);
+    if (style) note.setAttribute("style", style);
     if (before) container.insertBefore(note, before);
     else container.appendChild(note);
   }
@@ -1062,36 +1062,106 @@ const injectMoreInfo = (ha) => {
   ensureNote(content, null, { entity_id: info.entityId }, "inline");
 };
 
+/** The entity of an automation or scene, found by the config ID in the editor URL. */
+const entityByConfigId = (hass, domain, id) =>
+  Object.values(hass.states).find((s) => s.entity_id.startsWith(`${domain}.`) && s.attributes.id === id)
+    ?.entity_id;
+
+/** Line the notes up with the editors' own cards. */
+const EDITOR_STYLE = "margin: 8px 8px 24px";
+
+/**
+ * Pages that get a notes section. `target` turns the URL into the object the note
+ * is about, `place` finds where the section goes: a container and the element to
+ * insert before (null appends).
+ */
+const PAGES = [
+  {
+    path: /^\/config\/devices\/device\/([^/]+)/,
+    tag: "ha-config-device-page",
+    variant: "card",
+    target: (id) => ({ device_id: id }),
+    // Right below the device's own info card.
+    place: (root) => {
+      const column = root.querySelector(".column");
+      return column && [column, column.querySelector(":scope > ha-device-info-card")?.nextElementSibling];
+    },
+  },
+  {
+    path: /^\/config\/areas\/area\/([^/]+)/,
+    tag: "ha-config-area-page",
+    variant: "card",
+    target: (id) => ({ area_id: id }),
+    // At the top of the first column.
+    place: (root) => {
+      const column = root.querySelector(".column");
+      return column && [column, column.querySelector(":scope > ha-card")];
+    },
+  },
+  {
+    path: /^\/config\/automation\/edit\/([^/]+)/,
+    tag: "ha-automation-editor",
+    variant: "inline",
+    style: EDITOR_STYLE,
+    target: (id, hass) => {
+      const entityId = entityByConfigId(hass, "automation", id);
+      return entityId && { entity_id: entityId };
+    },
+    // Below the triggers, conditions and actions.
+    place: (root) => {
+      const editor = root.querySelector("manual-automation-editor, blueprint-automation-editor");
+      return editor && [editor.parentElement, null];
+    },
+  },
+  {
+    path: /^\/config\/script\/edit\/([^/]+)/,
+    tag: "ha-script-editor",
+    variant: "inline",
+    style: EDITOR_STYLE,
+    target: (id, hass) => (hass.states[`script.${id}`] ? { entity_id: `script.${id}` } : null),
+    place: (root) => {
+      const editor = root.querySelector("manual-script-editor, blueprint-script-editor");
+      return editor && [editor.parentElement, null];
+    },
+  },
+  {
+    path: /^\/config\/scene\/edit\/([^/]+)/,
+    tag: "ha-scene-editor",
+    variant: "inline",
+    style: EDITOR_STYLE,
+    target: (id, hass) => {
+      const entityId = entityByConfigId(hass, "scene", id);
+      return entityId && { entity_id: entityId };
+    },
+    // After the last section of the scene editor.
+    place: (root) => {
+      const sections = root.querySelectorAll("ha-config-section");
+      const last = sections[sections.length - 1];
+      return last && [last.parentElement, null];
+    },
+  },
+];
+
 let pageCache = { path: null, page: null };
 
 const injectPage = (ha) => {
   const path = location.pathname;
-  let tag;
-  let target;
-  let match = path.match(/^\/config\/devices\/device\/([^/]+)/);
-  if (match) {
-    tag = "ha-config-device-page";
-    target = { device_id: match[1] };
-  } else if ((match = path.match(/^\/config\/areas\/area\/([^/]+)/))) {
-    tag = "ha-config-area-page";
-    target = { area_id: decodeURIComponent(match[1]) };
-  } else {
+  let match = null;
+  const spec = PAGES.find((p) => (match = path.match(p.path)));
+  if (!spec) {
     pageCache = { path: null, page: null };
     return;
   }
+  const target = spec.target(decodeURIComponent(match[1]), ha.hass);
+  if (!target) return;
   let page = pageCache.path === path && pageCache.page?.isConnected ? pageCache.page : null;
   if (!page) {
-    page = deepFind(ha, tag);
+    page = deepFind(ha, spec.tag);
     pageCache = { path, page };
   }
-  const column = page?.shadowRoot?.querySelector(".column");
-  if (!column) return;
-  // Right below the device's own info card, or at the top of an area's first column.
-  const anchor =
-    tag === "ha-config-device-page"
-      ? column.querySelector(":scope > ha-device-info-card")?.nextElementSibling
-      : column.querySelector(":scope > ha-card");
-  ensureNote(column, anchor || null, target, "card");
+  const spot = page?.shadowRoot && spec.place(page.shadowRoot);
+  if (!spot) return;
+  ensureNote(spot[0], spot[1] || null, target, spec.variant, spec.style);
 };
 
 const tick = () => {

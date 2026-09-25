@@ -58,10 +58,12 @@ from .const import (
     CONF_INCLUDE_HIDDEN,
     DEFAULT_OPTIONS,
     DOMAIN,
+    DOMAIN_FOLDERS,
     EVENT_NOTE_UPDATED,
     KIND_AREA,
     KIND_DEVICE,
     KIND_ENTITY,
+    KIND_FOLDERS,
     SYNC_DEBOUNCE,
 )
 from .templates import (
@@ -111,6 +113,9 @@ MANAGED_KEYS: frozenset[str] = frozenset(
         "via_device",
         "entities",
         "devices",
+        "areas",
+        "description",
+        "mode",
         "ha_url",
         "ha_removed",
     }
@@ -271,6 +276,9 @@ class NotesVault:
         #: still holding exactly that body counts as empty. Kept in .storage rather
         #: than in the note, so nothing shows up in Obsidian's properties.
         self._prefill: dict[str, dict[str, str]] = {}
+        self._templates_store: Store[dict[str, list[str]]] = Store(
+            hass, 1, f"{DOMAIN}.templates"
+        )
         self._store: Store[dict[str, dict[str, str]]] = Store(
             hass, 1, f"{DOMAIN}.prefill"
         )
@@ -289,7 +297,11 @@ class NotesVault:
         """Scan the vault, generate the notes and start following registry changes."""
         self._prefill = await self._store.async_load() or {}
         await self.hass.async_add_executor_job(self.vault.ensure)
-        await self.hass.async_add_executor_job(self._seed_templates)
+        stored = await self._templates_store.async_load() or {}
+        seeded = await self.hass.async_add_executor_job(
+            self._seed_templates, set(stored.get("seeded", []))
+        )
+        await self._templates_store.async_save({"seeded": sorted(seeded)})
         await self.hass.async_add_executor_job(self._scan)
         self._debouncer = Debouncer(
             self.hass,
@@ -355,11 +367,60 @@ class NotesVault:
             if isinstance(integration, Integration):
                 self._integration_names[domain] = integration.name
 
-    def _folder(self, kind: str) -> str:
-        sub = {KIND_ENTITY: "Entities", KIND_DEVICE: "Devices", KIND_AREA: "Areas"}[
-            kind
-        ]
+    def _folder(self, kind: str, domain: str | None = None) -> str:
+        """Return the generated folder for a kind of note.
+
+        Automations, scripts and scenes get folders of their own rather than sitting
+        among thousands of sensors.
+        """
+        sub = DOMAIN_FOLDERS.get(domain or "") or KIND_FOLDERS[kind]
         return f"{self.base}/{sub}" if self.base else sub
+
+    @property
+    def generated_folders(self) -> set[str]:
+        """Every folder the generator writes notes to."""
+        return {self._folder(k) for k in KIND_FOLDERS} | {
+            self._folder(KIND_ENTITY, d) for d in DOMAIN_FOLDERS
+        }
+
+    @callback
+    def _logic_details(self, domain: str, entity_id: str) -> dict[str, Any]:
+        """Describe an automation, script or scene: what it's for and what it touches.
+
+        The referenced entities, devices and areas become links, so in Obsidian a
+        light's backlinks show every automation that controls it.
+        """
+        # Imported here: these integrations may not be loaded, and a custom
+        # integration shouldn't import them at module level just for this.
+        from homeassistant.components import (  # noqa: PLC0415
+            automation,
+            script,
+        )
+        from homeassistant.components.homeassistant import (  # noqa: PLC0415
+            scene,
+        )
+
+        details: dict[str, Any] = {}
+        if domain == "automation":
+            details["entities"] = automation.entities_in_automation(
+                self.hass, entity_id
+            )
+            details["devices"] = automation.devices_in_automation(self.hass, entity_id)
+            details["areas"] = automation.areas_in_automation(self.hass, entity_id)
+            component = self.hass.data.get(automation.DATA_COMPONENT)
+        elif domain == "script":
+            details["entities"] = script.entities_in_script(self.hass, entity_id)
+            details["devices"] = script.devices_in_script(self.hass, entity_id)
+            details["areas"] = script.areas_in_script(self.hass, entity_id)
+            component = self.hass.data.get(script.DOMAIN)
+        else:
+            details["entities"] = scene.entities_in_scene(self.hass, entity_id)
+            component = None
+        entity = component.get_entity(entity_id) if component else None
+        config = getattr(entity, "raw_config", None) or {}
+        details["description"] = config.get("description") or None
+        details["mode"] = config.get("mode")
+        return details
 
     def _url(self, path: str) -> str | None:
         return f"{self._base_url}{path}" if self._base_url else None
@@ -533,6 +594,11 @@ class NotesVault:
             doc.managed["unit"] = state.attributes.get("unit_of_measurement")
             docs[doc.key] = doc
 
+        for doc in docs.values():
+            if doc.kind == KIND_ENTITY and doc.managed["domain"] in DOMAIN_FOLDERS:
+                doc.managed.update(
+                    self._logic_details(doc.managed["domain"], doc.managed["entity_id"])
+                )
         return docs
 
     def _entity_doc(
@@ -543,7 +609,7 @@ class NotesVault:
             kind=KIND_ENTITY,
             ha_id=ha_id,
             name=name,
-            folder=self._folder(KIND_ENTITY),
+            folder=self._folder(KIND_ENTITY, domain),
             stem=entity_id,
             wanted=wanted,
             aliases=[name] if name and name != entity_id else [],
@@ -587,16 +653,20 @@ class NotesVault:
         taken: set[str] = set()
         planned: dict[DocKey, str] = {}
         pending: list[Doc] = []
+        generated = self.generated_folders
         for key, doc in docs.items():
             current = self.index.get(key)
             if current is None:
                 pending.append(doc)
                 continue
             current_stem = PurePosixPath(link_target(current)).name
-            in_folder = PurePosixPath(current).parent.as_posix() == doc.folder
-            # Only rename files still where the generator put them: a note the user
-            # moved or renamed in Obsidian stays where they put it.
-            if in_folder and not _stem_matches(current_stem, doc.stem):
+            parent = PurePosixPath(current).parent.as_posix()
+            # Only move files still where the generator put them: a note the user
+            # moved or renamed in Obsidian stays where they put it. A note in the
+            # wrong generated folder (an automation among the entities) moves.
+            if parent in generated and (
+                parent != doc.folder or not _stem_matches(current_stem, doc.stem)
+            ):
                 pending.append(doc)
                 continue
             planned[key] = current
@@ -638,6 +708,26 @@ class NotesVault:
                     devices_by_area.setdefault(area_id, []).append(
                         wikilink(paths[doc.key], doc.name)
                     )
+        by_entity_id = {
+            d.managed["entity_id"]: k for k, d in docs.items() if d.kind == KIND_ENTITY
+        }
+
+        def links(kind: str, ids: list[str]) -> list[str]:
+            keys = (
+                [by_entity_id.get(i) for i in ids]
+                if kind == KIND_ENTITY
+                else [(kind, i) for i in ids]
+            )
+            return sorted(
+                wikilink(paths[k], docs[k].name) for k in keys if k and k in paths
+            )
+
+        for doc in docs.values():
+            m = doc.managed
+            if doc.kind == KIND_ENTITY and m["domain"] in DOMAIN_FOLDERS:
+                m["entities"] = links(KIND_ENTITY, m.get("entities") or [])
+                m["devices"] = links(KIND_DEVICE, m.get("devices") or [])
+                m["areas"] = links(KIND_AREA, m.get("areas") or [])
         for doc in docs.values():
             if doc.kind == KIND_DEVICE:
                 doc.managed["entities"] = sorted(entities_by_device.get(doc.ha_id, []))
@@ -753,6 +843,7 @@ class NotesVault:
             old = self.index.get(key)
             if old and old != path:
                 try:
+                    self.vault.resolve(path).parent.mkdir(parents=True, exist_ok=True)
                     self.vault.move(old, path, overwrite=False)
                     renames[link_target(old)] = link_target(path)
                     stats["renamed"] += 1
@@ -1075,7 +1166,7 @@ class NotesVault:
     @property
     def locked_folders(self) -> set[str]:
         """Folders the generator owns, which can't be renamed or deleted by hand."""
-        folders = {self._folder(k) for k in (KIND_ENTITY, KIND_DEVICE, KIND_AREA)}
+        folders = self.generated_folders
         folders.add(self.templates_folder)
         if self.base:
             folders.add(self.base)
@@ -1187,18 +1278,21 @@ class NotesVault:
         """Folder holding the note templates."""
         return f"{self.base}/Templates" if self.base else "Templates"
 
-    def _seed_templates(self) -> None:
-        """Write the default templates the first time. Runs in the executor.
+    def _seed_templates(self, seeded: set[str]) -> set[str]:
+        """Write the default templates not written before. Runs in the executor.
 
-        Only when the folder does not exist: once it does, it is the user's, and a
-        template they deleted stays deleted. Removing the folder brings them back.
+        `seeded` is every default already written once, so a default added in an
+        update reaches existing vaults while one the user deleted stays deleted.
+        Removing the whole folder starts over and brings them all back.
         """
-        if self.vault.exists(self.templates_folder):
-            return
+        if not self.vault.exists(self.templates_folder):
+            seeded = set()
         for name, text in DEFAULT_TEMPLATES.items():
-            self.vault.write_text(
-                f"{self.templates_folder}/{name}{MARKDOWN_SUFFIX}", text
-            )
+            path = f"{self.templates_folder}/{name}{MARKDOWN_SUFFIX}"
+            if name not in seeded and not self.vault.exists(path):
+                self.vault.write_text(path, text)
+            seeded.add(name)
+        return seeded
 
     def _load_templates(self) -> list[Template]:
         """Read every template in the folder. Runs in the executor."""

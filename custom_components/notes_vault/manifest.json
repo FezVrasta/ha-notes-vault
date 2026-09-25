@@ -1,6 +1,10 @@
 {
   "domain": "notes_vault",
   "name": "Notes Vault",
+  "after_dependencies": [
+    "automation",
+    "script"
+  ],
   "codeowners": [
     "@FezVrasta"
   ],

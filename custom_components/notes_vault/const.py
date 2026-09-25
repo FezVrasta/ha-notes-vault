@@ -64,6 +64,19 @@ KIND_ENTITY: Final = "entity"
 KIND_DEVICE: Final = "device"
 KIND_AREA: Final = "area"
 
+#: Generated folder for each kind of note, inside the generated notes folder.
+KIND_FOLDERS: Final = {
+    KIND_ENTITY: "Entities",
+    KIND_DEVICE: "Devices",
+    KIND_AREA: "Areas",
+}
+#: Entity domains with a folder of their own: the home's logic, not its sensors.
+DOMAIN_FOLDERS: Final = {
+    "automation": "Automations",
+    "script": "Scripts",
+    "scene": "Scenes",
+}
+
 #: Seconds to wait after a registry change before regenerating, so a burst of changes
 #: (an integration adding fifty entities) becomes one pass over the vault.
 SYNC_DEBOUNCE: Final = 5.0

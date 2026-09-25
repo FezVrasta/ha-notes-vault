@@ -250,6 +250,18 @@ ha_template:
 
 ## Known issues
 """,
+    "Scene": """\
+---
+ha_template:
+  applies_to: entity
+  domains: [scene]
+---
+## When it's used
+
+## What it sets
+
+## Known issues
+""",
     "Lock and security": """\
 ---
 ha_template:
