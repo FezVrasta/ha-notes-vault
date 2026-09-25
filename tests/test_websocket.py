@@ -98,3 +98,65 @@ async def test_path_outside_vault(
     )
     response = await ws.receive_json()
     assert response["error"]["code"] == "invalid_path"
+
+
+async def test_folders_create_rename_delete(
+    hass: HomeAssistant, manager: NotesVault, hass_ws_client, vault_dir: Path
+) -> None:
+    """Folders can be made, renamed with their links following, and removed."""
+    ws = await hass_ws_client(hass)
+
+    async def call(**msg):
+        await ws.send_json_auto_id(msg)
+        return await ws.receive_json()
+
+    assert (await call(type="notes_vault/mkdir", path="Projects/Garden"))["success"]
+    tree = (await call(type="notes_vault/tree"))["result"]
+    assert "Projects/Garden" in tree["folders"]
+    assert "Home Assistant/Devices" in tree["locked"]
+
+    await call(type="notes_vault/set", path="Projects/Garden/Pond.md", note="Pump")
+    await call(
+        type="notes_vault/set",
+        path="Todo.md",
+        note="See [[Projects/Garden/Pond]] and [[Pond]]",
+    )
+
+    moved = await call(
+        type="notes_vault/move", path="Projects/Garden", to="Outside/Garden"
+    )
+    assert moved["result"]["path"] == "Outside/Garden"
+    assert (vault_dir / "Outside/Garden/Pond.md").exists()
+    assert (
+        vault_dir / "Todo.md"
+    ).read_text() == "See [[Outside/Garden/Pond]] and [[Pond]]\n"
+
+    renamed = await call(
+        type="notes_vault/move",
+        path="Outside/Garden/Pond.md",
+        to="Outside/Garden/Koi pond.md",
+    )
+    assert renamed["success"]
+    assert (
+        vault_dir / "Todo.md"
+    ).read_text() == "See [[Outside/Garden/Koi pond]] and [[Koi pond]]\n"
+
+    assert (await call(type="notes_vault/mkdir", path="Outside"))["error"][
+        "code"
+    ] == "exists"
+    assert (await call(type="notes_vault/delete", path="Outside"))["success"]
+    assert not (vault_dir / "Outside").exists()
+
+
+async def test_generated_folders_are_locked(
+    hass: HomeAssistant, manager: NotesVault, hass_ws_client
+) -> None:
+    """The folders the generator writes to can't be moved or deleted by hand."""
+    ws = await hass_ws_client(hass)
+    for msg in (
+        {"type": "notes_vault/move", "path": "Home Assistant", "to": "HA"},
+        {"type": "notes_vault/move", "path": "Home Assistant/Devices", "to": "Stuff"},
+        {"type": "notes_vault/delete", "path": "Home Assistant/Templates"},
+    ):
+        await ws.send_json_auto_id(msg)
+        assert (await ws.receive_json())["error"]["code"] == "locked", msg

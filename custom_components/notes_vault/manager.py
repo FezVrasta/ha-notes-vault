@@ -73,6 +73,7 @@ from .templates import (
 )
 from .vault import (
     MARKDOWN_SUFFIX,
+    InvalidPathError,
     Note,
     NotFoundError,
     Vault,
@@ -132,6 +133,10 @@ def _prefill_key(key: DocKey) -> str:
 
 #: The target of a wikilink: `[[target]]`, `[[target|label]]`, `[[target#heading]]`.
 _WIKILINK = re.compile(r"\[\[([^\]|#^]+)")
+
+
+class LockedFolderError(VaultError):
+    """The folder belongs to the generator and can't be moved or deleted by hand."""
 
 
 @dataclass(slots=True)
@@ -1037,11 +1042,90 @@ class NotesVault:
         self.file_changed(path, source)
         return await self.async_get_file(path)
 
-    async def async_tree(self) -> list[dict[str, Any]]:
-        """List every note in the vault, with the display name of generated ones."""
+    async def async_tree(self) -> dict[str, Any]:
+        """List every note and folder in the vault.
+
+        Generated notes carry the display name of what they are about. Folders are
+        listed on their own so an empty one still shows up.
+        """
         paths = await self.hass.async_add_executor_job(self._markdown_paths)
+        folders = await self.hass.async_add_executor_job(self._folders)
         names = self._display_names()
-        return [{"path": p, "name": names.get(p)} for p in paths]
+        return {
+            "notes": [{"path": p, "name": names.get(p)} for p in paths],
+            "folders": folders,
+            "locked": sorted(self.locked_folders),
+        }
+
+    def _folders(self) -> list[str]:
+        """List every folder in the vault, skipping hidden ones. Runs in the executor."""
+        found: list[str] = []
+        stack = [""]
+        while stack:
+            for entry in self.vault.list_dir(stack.pop()):
+                if entry.is_dir and not PurePosixPath(entry.path).name.startswith("."):
+                    found.append(entry.path)
+                    stack.append(entry.path)
+        return sorted(found)
+
+    @property
+    def locked_folders(self) -> set[str]:
+        """Folders the generator owns, which can't be renamed or deleted by hand."""
+        folders = {self._folder(k) for k in (KIND_ENTITY, KIND_DEVICE, KIND_AREA)}
+        folders.add(self.templates_folder)
+        if self.base:
+            folders.add(self.base)
+        return folders
+
+    def _check_unlocked(self, path: str) -> None:
+        for locked in self.locked_folders:
+            if path == locked or locked.startswith(f"{path}/"):
+                raise LockedFolderError(path)
+
+    async def async_mkdir(self, path: str) -> str:
+        """Create a folder, and any missing parents."""
+        path = self.vault.normalize(path)
+        if not path:
+            raise InvalidPathError(path)
+        await self.hass.async_add_executor_job(
+            lambda: self.vault.mkdir(path, parents=True)
+        )
+        return path
+
+    async def async_move(self, src: str, dst: str) -> str:
+        """Rename or move a note or folder, and point every link at the new place."""
+        src = self.vault.normalize(src)
+        dst = self.vault.normalize(dst)
+        if not src or not dst:
+            raise InvalidPathError(dst)
+        self._check_unlocked(src)
+        if dst == src or dst.startswith(f"{src}/"):
+            raise InvalidPathError(dst)
+
+        def _move() -> None:
+            is_dir = self.vault.stat(src).is_dir
+            moved = list(self.vault.iter_markdown(src)) if is_dir else [src]
+            self.vault.resolve(dst).parent.mkdir(parents=True, exist_ok=True)
+            self.vault.move(src, dst, overwrite=False)
+            renames = {}
+            for old in moved:
+                new = dst + old[len(src) :] if is_dir else dst
+                renames[link_target(old)] = link_target(new)
+            self.vault.rewrite_links(renames)
+
+        async with self.lock:
+            await self.hass.async_add_executor_job(_move)
+            self._written.clear()
+        self.file_moved(src, dst)
+        return dst
+
+    async def async_delete(self, path: str) -> None:
+        """Delete a note, or a folder with everything in it."""
+        path = self.vault.normalize(path)
+        self._check_unlocked(path)
+        async with self.lock:
+            await self.hass.async_add_executor_job(self.vault.delete, path)
+        self.file_removed(path)
 
     @callback
     def _display_names(self) -> dict[str, str]:

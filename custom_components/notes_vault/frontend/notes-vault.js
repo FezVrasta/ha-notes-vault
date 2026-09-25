@@ -303,6 +303,10 @@ class NotesVaultNote extends HTMLElement {
     this._render();
   }
 
+  _rename() {
+    this._fire("notes-vault-rename", { path: this._state.path });
+  }
+
   _openInHa() {
     const href = haHref(this._state.ha);
     if (href?.startsWith("#notes-vault-entity=")) {
@@ -384,6 +388,9 @@ class NotesVaultNote extends HTMLElement {
         const label = { entity: "Show entity", device: "Go to device", area: "Go to area" }[s.ha.type];
         extra.push(this._button("openInHa", label));
       }
+      // Generated notes are named after what they're about, so only the user's
+      // own notes can be renamed.
+      if (inPanel && s.exists && !s.ha) extra.push(this._button("rename", "Rename"));
       if (inPanel && s.exists && !s.ha) {
         extra.push(
           this._button("delete", s.confirmDelete ? "Delete for good" : "Delete", {
@@ -483,17 +490,30 @@ const PANEL_STYLE = `
   :host([narrow]) .sidebar { width: 100%; border-right: none; }
   :host([narrow]) .layout.showing-note .sidebar, :host([narrow]) .layout:not(.showing-note) .main { display: none; }
   .empty { color: var(--secondary-text-color); padding: 32px 16px; text-align: center; }
+  .secondary { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); word-break: break-all; }
+  .card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card-actions .spacer { flex: 1; }
+  ha-alert { display: block; margin-top: 8px; }
   ha-list-item { --mdc-list-item-graphic-margin: 16px; }
 `;
 
+const parentOf = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const baseName = (path) => path.split("/").pop();
+
+/**
+ * The Notes panel: the vault as a tree on the left, the note or folder on the right.
+ * `?path=` opens a note, `?folder=` a folder.
+ */
 class NotesVaultPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._notes = [];
+    this._folders = [];
+    this._locked = new Set();
     this._query = "";
     this._results = null;
-    this._creating = false;
+    this._form = null;
     try {
       this._expanded = new Set(JSON.parse(localStorage.getItem("notes-vault-expanded") || "[]"));
     } catch (err) {
@@ -516,8 +536,6 @@ class NotesVaultPanel extends HTMLElement {
   set narrow(narrow) {
     this._narrow = narrow;
     this.toggleAttribute("narrow", !!narrow);
-    const menu = this.shadowRoot.querySelector("ha-menu-button");
-    if (menu) menu.narrow = narrow;
     this._renderNav();
   }
 
@@ -546,7 +564,10 @@ class NotesVaultPanel extends HTMLElement {
       <ha-top-app-bar-fixed>
         <span slot="navigationIcon" class="nav"></span>
         <div slot="title">Notes</div>
-        <ha-icon-button slot="actionItems" label="New note" data-action="new">
+        <ha-icon-button slot="actionItems" label="New folder" data-action="newFolder">
+          <ha-icon icon="mdi:folder-plus-outline"></ha-icon>
+        </ha-icon-button>
+        <ha-icon-button slot="actionItems" label="New note" data-action="newNote">
           <ha-icon icon="mdi:note-plus-outline"></ha-icon>
         </ha-icon-button>
         <div class="layout">
@@ -562,11 +583,15 @@ class NotesVaultPanel extends HTMLElement {
     this.shadowRoot.addEventListener("click", (ev) => this._onClick(ev));
     this.shadowRoot.addEventListener("notes-vault-open", (ev) => {
       ev.stopPropagation();
-      this._open(ev.detail.path);
+      this._go({ path: ev.detail.path });
+    });
+    this.shadowRoot.addEventListener("notes-vault-rename", (ev) => {
+      ev.stopPropagation();
+      this._renameForm(ev.detail.path, false);
     });
     this.shadowRoot.addEventListener("notes-vault-changed", (ev) => {
       ev.stopPropagation();
-      if (ev.detail.deleted) this._open(null);
+      if (ev.detail.deleted) this._go({ folder: parentOf(ev.detail.path) || null });
       this._loadTree();
     });
     this._renderNav();
@@ -574,10 +599,48 @@ class NotesVaultPanel extends HTMLElement {
     this._syncFromUrl();
   }
 
+  // -- Navigation ----------------------------------------------------------------
+
+  _selection() {
+    const params = new URLSearchParams(location.search);
+    return { path: params.get("path"), folder: params.get("folder") };
+  }
+
+  _syncFromUrl() {
+    if (!location.pathname.startsWith(PANEL_PATH)) return;
+    const { path, folder } = this._selection();
+    if (path !== (this._path ?? null) || folder !== (this._folder ?? null) || this._form) {
+      this._show({ path, folder });
+    }
+  }
+
+  /** Open a note or a folder, and put it in the URL. */
+  _go({ path = null, folder = null }) {
+    let url = PANEL_PATH;
+    if (path) url = panelHref(path);
+    else if (folder) url = `${PANEL_PATH}?folder=${encodeURIComponent(folder)}`;
+    history.pushState(null, "", url);
+    this._show({ path, folder });
+  }
+
+  _show({ path, folder }) {
+    this._path = path || null;
+    this._folder = path ? null : folder || null;
+    this._form = null;
+    this._confirmDelete = false;
+    // Reveal the selection in the tree.
+    const target = path ? parentOf(path) : folder || "";
+    const parts = target ? target.split("/") : [];
+    parts.forEach((_p, i) => this._expanded.add(parts.slice(0, i + 1).join("/")));
+    this._renderMain();
+    this._renderList();
+    this._renderNav();
+  }
+
   _renderNav() {
     const nav = this.shadowRoot.querySelector(".nav");
     if (!nav) return;
-    const showBack = this._narrow && (this._path || this._creating);
+    const showBack = this._narrow && (this._path || this._folder || this._form);
     nav.innerHTML = showBack
       ? `<ha-icon-button label="Back" data-action="back"><ha-icon icon="mdi:arrow-left"></ha-icon></ha-icon-button>`
       : `<ha-menu-button></ha-menu-button>`;
@@ -589,72 +652,47 @@ class NotesVaultPanel extends HTMLElement {
     this.shadowRoot.querySelector(".layout")?.classList.toggle("showing-note", !!showBack);
   }
 
+  // -- Data ----------------------------------------------------------------------
+
   async _loadTree() {
     try {
       const result = await this._hass.callWS({ type: "notes_vault/tree" });
       this._notes = result.notes;
+      this._folders = result.folders;
+      this._locked = new Set(result.locked);
+      this._treeError = null;
     } catch (err) {
       this._notes = [];
       this._treeError = err.message || String(err);
     }
     this._renderList();
+    if (this._folder && !this._form) this._renderMain();
   }
 
-  _syncFromUrl() {
-    if (!location.pathname.startsWith(PANEL_PATH)) return;
-    const path = new URLSearchParams(location.search).get("path");
-    if (path !== (this._path ?? null)) this._show(path);
-  }
-
-  _open(path) {
-    const url = path ? panelHref(path) : PANEL_PATH;
-    history.pushState(null, "", url);
-    this._show(path);
-  }
-
-  _show(path) {
-    this._path = path || null;
-    this._creating = false;
-    // Reveal the note in the tree.
-    if (path) {
-      const parts = path.split("/").slice(0, -1);
-      parts.forEach((_p, i) => this._expanded.add(parts.slice(0, i + 1).join("/")));
+  _allFolders() {
+    const folders = new Set(this._folders);
+    for (const n of this._notes) {
+      const parts = n.path.split("/").slice(0, -1);
+      parts.forEach((_p, i) => folders.add(parts.slice(0, i + 1).join("/")));
     }
-    this._renderMain();
-    this._renderList();
-    this._renderNav();
+    return [...folders].sort((a, b) => a.localeCompare(b));
   }
+
+  _isLocked(folder) {
+    return [...this._locked].some((l) => l === folder || l.startsWith(`${folder}/`));
+  }
+
+  // -- Main pane -----------------------------------------------------------------
 
   _renderMain() {
     const main = this.shadowRoot.querySelector(".main");
     if (!main) return;
-    if (this._creating) {
-      main.innerHTML = `
-        <ha-card header="New note">
-          <div class="card-content"><ha-form></ha-form></div>
-          <div class="card-actions" style="display:flex;justify-content:flex-end;gap:8px">
-            <ha-button size="s" appearance="plain" data-action="back">Cancel</ha-button>
-            <ha-button size="s" appearance="filled" data-action="create">Create</ha-button>
-          </div>
-        </ha-card>`;
-      const folders = [...new Set(this._notes.map((n) => n.path.split("/").slice(0, -1).join("/")))]
-        .filter((f) => f)
-        .sort();
-      const form = main.querySelector("ha-form");
-      form.hass = this._hass;
-      form.schema = [
-        { name: "name", required: true, selector: { text: {} } },
-        {
-          name: "folder",
-          selector: { select: { mode: "dropdown", custom_value: true, options: ["", ...folders].map((f) => ({ value: f, label: f || "Top level" })) } },
-        },
-      ];
-      form.data = this._newNote || { name: "", folder: "" };
-      form.computeLabel = (field) => ({ name: "Name", folder: "Folder" })[field.name];
-      form.addEventListener("value-changed", (ev) => {
-        this._newNote = ev.detail.value;
-        form.data = this._newNote;
-      });
+    if (this._form) {
+      this._renderForm(main);
+      return;
+    }
+    if (this._folder) {
+      this._renderFolder(main);
       return;
     }
     if (!this._path) {
@@ -671,6 +709,124 @@ class NotesVaultPanel extends HTMLElement {
     note.hass = this._hass;
     note.setTarget({ path: this._path });
   }
+
+  _renderFolder(main) {
+    const folder = this._folder;
+    const prefix = `${folder}/`;
+    const notes = this._notes.filter((n) => n.path.startsWith(prefix)).length;
+    const folders = this._allFolders().filter((f) => f.startsWith(prefix)).length;
+    const locked = this._isLocked(folder);
+    const empty = !notes && !folders;
+    const count = [notes && `${notes} ${notes === 1 ? "note" : "notes"}`, folders && `${folders} ${folders === 1 ? "folder" : "folders"}`]
+      .filter(Boolean)
+      .join(", ");
+    main.innerHTML = `
+      <ha-card header="${escapeHtml(baseName(folder))}">
+        <div class="card-content">
+          <div class="secondary">${escapeHtml(folder)}</div>
+          <p>${escapeHtml(count || "Empty folder.")}</p>
+          ${locked ? `<ha-alert alert-type="info">Home Assistant writes the generated notes here. Change where they go in the integration's options.</ha-alert>` : ""}
+          ${!locked && !empty && this._confirmDelete ? `<ha-alert alert-type="warning">Only empty folders can be deleted here. Move or delete what's inside first.</ha-alert>` : ""}
+        </div>
+        <div class="card-actions">
+          <ha-button size="s" appearance="plain" data-action="newNote">New note here</ha-button>
+          <ha-button size="s" appearance="plain" data-action="newFolder">New folder here</ha-button>
+          <span class="spacer"></span>
+          ${locked ? "" : `<ha-button size="s" appearance="plain" data-action="renameFolder">Rename</ha-button>`}
+          ${locked ? "" : `<ha-button size="s" appearance="${this._confirmDelete && empty ? "filled" : "plain"}" variant="danger" data-action="deleteFolder">${this._confirmDelete && empty ? "Delete for good" : "Delete"}</ha-button>`}
+        </div>
+      </ha-card>`;
+  }
+
+  /** One form for new notes, new folders and renames. */
+  _renderForm(main) {
+    const f = this._form;
+    main.innerHTML = `
+      <ha-card header="${escapeHtml(f.title)}">
+        <div class="card-content">
+          <ha-form></ha-form>
+          ${f.error ? `<ha-alert alert-type="error">${escapeHtml(f.error)}</ha-alert>` : ""}
+        </div>
+        <div class="card-actions">
+          <span class="spacer"></span>
+          <ha-button size="s" appearance="plain" data-action="cancelForm">Cancel</ha-button>
+          <ha-button size="s" appearance="filled" data-action="submitForm">${escapeHtml(f.submit)}</ha-button>
+        </div>
+      </ha-card>`;
+    const form = main.querySelector("ha-form");
+    const folders = this._allFolders().filter((x) => !f.excludeFolder || (x !== f.excludeFolder && !x.startsWith(`${f.excludeFolder}/`)));
+    form.hass = this._hass;
+    form.schema = [
+      { name: "name", required: true, selector: { text: {} } },
+      {
+        name: "folder",
+        selector: {
+          select: {
+            mode: "dropdown",
+            custom_value: true,
+            options: ["", ...folders].map((x) => ({ value: x, label: x || "Top level" })),
+          },
+        },
+      },
+    ];
+    form.data = f.data;
+    form.computeLabel = (field) => ({ name: "Name", folder: "Folder" })[field.name];
+    form.addEventListener("value-changed", (ev) => {
+      f.data = ev.detail.value;
+      form.data = f.data;
+    });
+    form.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") this._submitForm();
+    });
+    // ha-form renders its fields asynchronously; focus the name once they exist.
+    form.updateComplete?.then(() =>
+      setTimeout(() => {
+        const field = form.shadowRoot?.querySelector("ha-selector")?.shadowRoot?.querySelector("*");
+        (field?.focus ? field : form).focus?.();
+      }, 150),
+    );
+  }
+
+  _openForm(form) {
+    this._form = form;
+    this._renderMain();
+    this._renderNav();
+  }
+
+  _currentFolder() {
+    if (this._folder) return this._folder;
+    if (this._path) return parentOf(this._path);
+    return "";
+  }
+
+  _renameForm(path, isFolder) {
+    this._openForm({
+      title: isFolder ? "Rename folder" : "Rename note",
+      submit: "Rename",
+      data: { name: isFolder ? baseName(path) : baseName(path).replace(/\.md$/, ""), folder: parentOf(path) },
+      excludeFolder: isFolder ? path : null,
+      run: async ({ name, folder }) => {
+        const to = [folder, isFolder ? name : `${name.replace(/\.md$/, "")}.md`].filter(Boolean).join("/");
+        const result = await this._hass.callWS({ type: "notes_vault/move", path, to });
+        await this._loadTree();
+        this._go(isFolder ? { folder: result.path } : { path: result.path });
+      },
+    });
+  }
+
+  async _submitForm() {
+    const f = this._form;
+    const name = (f.data.name || "").trim();
+    if (!name) return;
+    try {
+      await f.run({ ...f.data, name });
+    } catch (err) {
+      f.error = err.message || String(err);
+      this._renderMain();
+    }
+  }
+
+  // -- Search --------------------------------------------------------------------
 
   _onSearch(value) {
     this._query = value || "";
@@ -690,37 +846,78 @@ class NotesVaultPanel extends HTMLElement {
     }, 250);
   }
 
-  _onClick(ev) {
+  // -- Clicks --------------------------------------------------------------------
+
+  async _onClick(ev) {
     const path = ev.composedPath();
     const action = path.find((el) => el.dataset?.action)?.dataset.action;
     const folder = path.find((el) => el.hasAttribute?.("data-folder"))?.dataset.folder;
     const file = path.find((el) => el.hasAttribute?.("data-file"))?.dataset.file;
-    if (action === "new") {
-      this._creating = true;
-      this._newNote = { name: "", folder: this._path ? this._path.split("/").slice(0, -1).join("/") : "" };
+    if (action === "newNote") {
+      this._openForm({
+        title: "New note",
+        submit: "Create",
+        data: { name: "", folder: this._currentFolder() },
+        run: async ({ name, folder: parent }) => {
+          const target = [parent, `${name.replace(/\.md$/, "")}.md`].filter(Boolean).join("/");
+          this._go({ path: target });
+        },
+      });
+    } else if (action === "newFolder") {
+      this._openForm({
+        title: "New folder",
+        submit: "Create",
+        data: { name: "", folder: this._currentFolder() },
+        run: async ({ name, folder: parent }) => {
+          const result = await this._hass.callWS({
+            type: "notes_vault/mkdir",
+            path: [parent, name].filter(Boolean).join("/"),
+          });
+          await this._loadTree();
+          this._go({ folder: result.path });
+        },
+      });
+    } else if (action === "renameFolder") {
+      this._renameForm(this._folder, true);
+    } else if (action === "deleteFolder") {
+      if (!this._confirmDelete) {
+        this._confirmDelete = true;
+        this._renderMain();
+        return;
+      }
+      const folder = this._folder;
+      const prefix = `${folder}/`;
+      if (this._notes.some((n) => n.path.startsWith(prefix)) || this._allFolders().some((f) => f.startsWith(prefix))) return;
+      await this._hass.callWS({ type: "notes_vault/delete", path: folder });
+      this._confirmDelete = false;
+      await this._loadTree();
+      this._go({ folder: parentOf(folder) || null });
+    } else if (action === "submitForm") {
+      this._submitForm();
+    } else if (action === "cancelForm") {
+      this._form = null;
       this._renderMain();
       this._renderNav();
     } else if (action === "back") {
-      this._creating = false;
-      this._open(null);
-    } else if (action === "create") {
-      const name = (this._newNote?.name || "").trim().replace(/\.md$/, "");
-      if (!name) return;
-      const target = [this._newNote.folder, `${name}.md`].filter((p) => p).join("/");
-      this._open(target);
+      this._go({});
     } else if (folder !== undefined) {
-      if (this._expanded.has(folder)) this._expanded.delete(folder);
-      else this._expanded.add(folder);
+      this._confirmDelete = false;
+      if (this._folder === folder || !this._expanded.has(folder)) {
+        if (this._expanded.has(folder) && this._folder === folder) this._expanded.delete(folder);
+        else this._expanded.add(folder);
+      }
       try {
         localStorage.setItem("notes-vault-expanded", JSON.stringify([...this._expanded]));
       } catch (err) {
         // Private mode: the tree just won't remember.
       }
-      this._renderList();
+      this._go({ folder });
     } else if (file) {
-      this._open(file);
+      this._go({ path: file });
     }
   }
+
+  // -- Tree ----------------------------------------------------------------------
 
   _renderList() {
     const list = this.shadowRoot.querySelector(".list");
@@ -753,25 +950,16 @@ class NotesVaultPanel extends HTMLElement {
 
   /** Rows for one folder level: subfolders first, then notes, sorted by name. */
   _treeRows(folder, depth) {
-    const prefix = folder ? `${folder}/` : "";
-    const folders = new Set();
-    const files = [];
-    for (const note of this._notes) {
-      if (!note.path.startsWith(prefix)) continue;
-      const rest = note.path.slice(prefix.length);
-      const slash = rest.indexOf("/");
-      if (slash === -1) files.push(note);
-      else folders.add(rest.slice(0, slash));
-    }
+    const folders = this._allFolders().filter((f) => parentOf(f) === folder);
+    const files = this._notes.filter((n) => parentOf(n.path) === folder);
     const indent = `style="--mdc-list-side-padding-left: ${16 + depth * 20}px"`;
     const rows = [];
-    for (const name of [...folders].sort((a, b) => a.localeCompare(b))) {
-      const full = prefix + name;
+    for (const full of folders) {
       const open = this._expanded.has(full);
       rows.push(`
-        <ha-list-item graphic="icon" data-folder="${escapeHtml(full)}" ${indent}>
+        <ha-list-item graphic="icon" data-folder="${escapeHtml(full)}" ${indent} ${full === this._folder ? "activated" : ""}>
           <ha-icon slot="graphic" icon="${open ? "mdi:folder-open-outline" : "mdi:folder-outline"}"></ha-icon>
-          ${escapeHtml(name)}
+          ${escapeHtml(baseName(full))}
         </ha-list-item>`);
       if (open) rows.push(...this._treeRows(full, depth + 1));
     }

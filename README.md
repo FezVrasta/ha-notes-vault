@@ -52,7 +52,7 @@ Notes Vault keeps a folder of Markdown files inside your Home Assistant config d
 - **A generated note per entity, device and area.** The frontmatter carries the name, IDs, integration, area, device and labels, with links between them, so Obsidian's backlinks and graph show how your home fits together. Renaming an entity ID renames its note and rewrites the links pointing at it.
 - **Sync with Obsidian.** A WebDAV endpoint on Home Assistant's own web server, authenticated with a long-lived access token. Built and tested against remotely-save.
 - **Actions for AI and automations.** Get, set and append notes, read and write any file, list folders, and search the vault. They return response data, so any Home Assistant MCP server can use them.
-- **A Notes panel.** **Notes** in the sidebar lists every note in the vault as a tree, with search, and opens any of them in the same editor, with the notes that link to it underneath. Administrators only, since the vault can hold anything.
+- **A Notes panel.** **Notes** in the sidebar lists every note in the vault as a tree, with search, and opens any of them in the same editor, with the notes that link to it underneath. Create, rename, move and delete notes and folders there; links to them follow. Administrators only, since the vault can hold anything.
 - **A dashboard card.** `custom:notes-vault-card` shows and edits the note of one entity, device or area.
 
 ## Install

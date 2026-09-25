@@ -11,8 +11,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 
 from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL, DOMAIN
-from .manager import NotesVault
-from .vault import VaultError
+from .manager import LockedFolderError, NotesVault
+from .vault import ConflictError, VaultError
+
+_LOCKED = (
+    "This folder holds the generated notes. Change where they go in the "
+    "integration's options instead."
+)
 
 _TARGET = {
     vol.Exclusive("entity_id", "target"): str,
@@ -40,6 +45,8 @@ def async_setup_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tree)
     websocket_api.async_register_command(hass, ws_search)
     websocket_api.async_register_command(hass, ws_delete)
+    websocket_api.async_register_command(hass, ws_mkdir)
+    websocket_api.async_register_command(hass, ws_move)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "notes_vault/info"})
@@ -184,7 +191,7 @@ async def ws_tree(
     if manager is None:
         connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
         return
-    connection.send_result(msg["id"], {"notes": await manager.async_tree()})
+    connection.send_result(msg["id"], await manager.async_tree())
 
 
 @websocket_api.websocket_command(
@@ -218,17 +225,76 @@ async def ws_search(
 async def ws_delete(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Delete a note."""
+    """Delete a note or a folder."""
     manager = _manager(hass)
     if manager is None:
         connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
         return
     try:
-        path = manager.vault.normalize(msg["path"])
-        async with manager.lock:
-            await hass.async_add_executor_job(manager.vault.delete, path)
+        await manager.async_delete(msg["path"])
+    except LockedFolderError:
+        connection.send_error(msg["id"], "locked", _LOCKED)
+        return
     except VaultError as err:
         connection.send_error(msg["id"], "invalid_path", str(err))
         return
-    manager.file_removed(path)
+    connection.send_result(msg["id"], {"path": msg["path"]})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "notes_vault/mkdir", vol.Required("path"): str}
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_mkdir(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Create a folder."""
+    manager = _manager(hass)
+    if manager is None:
+        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
+        return
+    try:
+        path = await manager.async_mkdir(msg["path"])
+    except ConflictError:
+        connection.send_error(
+            msg["id"], "exists", "A folder or note with that name already exists"
+        )
+        return
+    except VaultError as err:
+        connection.send_error(msg["id"], "invalid_path", str(err))
+        return
+    connection.send_result(msg["id"], {"path": path})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "notes_vault/move",
+        vol.Required("path"): str,
+        vol.Required("to"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_move(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Rename or move a note or folder, rewriting the links to it."""
+    manager = _manager(hass)
+    if manager is None:
+        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
+        return
+    try:
+        path = await manager.async_move(msg["path"], msg["to"])
+    except LockedFolderError:
+        connection.send_error(msg["id"], "locked", _LOCKED)
+        return
+    except ConflictError:
+        connection.send_error(
+            msg["id"], "exists", "A folder or note with that name already exists"
+        )
+        return
+    except VaultError as err:
+        connection.send_error(msg["id"], "invalid_path", str(err))
+        return
     connection.send_result(msg["id"], {"path": path})
