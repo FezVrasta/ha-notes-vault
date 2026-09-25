@@ -43,7 +43,7 @@ Notes Vault keeps a folder of Markdown files inside your Home Assistant config d
   </tr>
 </table>
 
-- **Notes in the Home Assistant UI.** Add or edit a note from any entity's more-info dialog, and from device and area pages. Notes are Markdown. A wikilink to an entity opens its dialog.
+- **Notes in the Home Assistant UI.** Add or edit a note from any entity's more-info dialog, and from device and area pages. Notes are Markdown, and wikilinks work: a link to an entity opens its more-info dialog, a link to a device or area opens its page.
 - **A generated note per entity, device and area.** The frontmatter carries the name, IDs, integration, area, device and labels, with links between them, so Obsidian's backlinks and graph show how your home fits together. Renaming an entity ID renames its note and rewrites the links pointing at it.
 - **Sync with Obsidian.** A WebDAV endpoint on Home Assistant's own web server, authenticated with a long-lived access token. Built and tested against remotely-save.
 - **Actions for AI and automations.** Get, set and append notes, read and write any file, list folders, and search the vault. They return response data, so any Home Assistant MCP server can use them.
@@ -115,7 +115,27 @@ Any other WebDAV client works with the same address and credentials (Finder's **
 
 ### Suggested: Front Matter Title
 
-Obsidian shows the file name as a note's title, so an entity note shows up as `light.kitchen_ceiling`. [Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title) shows a frontmatter key instead, in the file explorer, tabs, graph, search and backlinks, without renaming the file. In its settings, set **Common main template** to `name` (the key Notes Vault writes the friendly name to), then turn on the places you want it.
+Obsidian shows the file name as a note's title, so an entity note shows up as `light.kitchen_ceiling`. [Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title) shows a frontmatter key instead, without renaming the file.
+
+1. In its settings, set **Common main template** to `name`, the key Notes Vault writes the friendly name to.
+2. Turn on the features. Each one is off until you enable it:
+
+| Feature | What it changes |
+| --- | --- |
+| **Explorer** (and **Explorer → Sort**) | File explorer shows and sorts by `Ceiling lamp` instead of `light.kitchen_ceiling` |
+| **Search** | Search results |
+| **Suggest** | Quick switcher and the `[[` link suggestions |
+| **Bookmarks** | Bookmarked notes |
+| **Backlink** | The backlinks pane, which is where a device note lists the entities pointing at it |
+| **Tabs** | Tab titles |
+| **Header** | The note header above the editor |
+| **Inline** | The inline title at the top of the note |
+| **Window Frame Title** | The window title |
+| **Graph** | Graph view nodes |
+| **Canvas** | Cards on a canvas |
+| **Note Link** | Rewrites the text of `[[light.kitchen_ceiling]]` to the name. Set its strategy to **Replace only links without alias**. It edits your files, so every rewrite is a change to sync. |
+
+Leave **Alias** off: the notes already carry their name in `aliases`.
 
 Links still work either way: type `[[Ceiling` and pick the alias, and Obsidian inserts `[[light.kitchen_ceiling|Ceiling lamp]]`.
 

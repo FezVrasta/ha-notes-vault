@@ -106,6 +106,9 @@ ADDITIVE_KEYS = ("aliases", "tags")
 
 type DocKey = tuple[str, str]
 
+#: The target of a wikilink: `[[target]]`, `[[target|label]]`, `[[target#heading]]`.
+_WIKILINK = re.compile(r"\[\[([^\]|#^]+)")
+
 
 @dataclass(slots=True)
 class Doc:
@@ -743,8 +746,42 @@ class NotesVault:
             "exists": note is not None,
             "note": note.body.strip("\n") if note else "",
             "frontmatter": note.frontmatter if note else {},
+            "links": self.resolve_links(note.body) if note else {},
             "mtime": mtime,
         }
+
+    @callback
+    def resolve_links(self, text: str) -> dict[str, dict[str, str]]:
+        """Map each wikilink target in the text to the Home Assistant object behind it.
+
+        Targets resolve the way Obsidian resolves them: by full path, or by file name
+        alone. Links to notes that are not generated (the user's own notes) are left
+        out, since Home Assistant has nothing to show for them.
+        """
+        targets = {m.group(1).strip() for m in _WIKILINK.finditer(text)}
+        if not targets:
+            return {}
+        by_target: dict[str, DocKey] = {}
+        for key, path in self.index.items():
+            full = link_target(path)
+            by_target.setdefault(full, key)
+            by_target.setdefault(PurePosixPath(full).name, key)
+        ent_reg = er.async_get(self.hass)
+        links: dict[str, dict[str, str]] = {}
+        for target in targets:
+            key = by_target.get(target)
+            if key is None:
+                continue
+            kind, ha_id = key
+            if kind == KIND_ENTITY:
+                entry = ent_reg.async_get(ha_id)
+                links[target] = {
+                    "type": kind,
+                    "id": entry.entity_id if entry else ha_id,
+                }
+            else:
+                links[target] = {"type": kind, "id": ha_id}
+        return links
 
     async def async_set_note(
         self, key: DocKey, content: str, *, append: bool = False, source: str = "ui"

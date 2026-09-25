@@ -36,6 +36,26 @@ async def test_note_by_entity(
     assert result["frontmatter"]["entity_id"] == "light.kitchen_ceiling"
 
 
+async def test_links_resolve_to_home_assistant_objects(
+    hass: HomeAssistant, home: dict, manager: NotesVault
+) -> None:
+    """Wikilinks by path or by file name come back with the object they point at."""
+    await _call(
+        hass,
+        "set_note",
+        device_id=home["device"].id,
+        note=(
+            "In [[Home Assistant/Areas/Kitchen|the kitchen]], see [[light.kitchen_ceiling]]"
+            " and [[My own note]]."
+        ),
+    )
+    result = await _call(hass, "get_note", device_id=home["device"].id)
+    assert result["links"] == {
+        "Home Assistant/Areas/Kitchen": {"type": "area", "id": home["area"].id},
+        "light.kitchen_ceiling": {"type": "entity", "id": "light.kitchen_ceiling"},
+    }
+
+
 async def test_note_by_device_and_area(
     hass: HomeAssistant, home: dict, manager: NotesVault
 ) -> None:
