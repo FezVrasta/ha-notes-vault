@@ -103,6 +103,7 @@ MANAGED_KEYS: frozenset[str] = frozenset(
         "ha_id",
         "entity_id",
         "device_id",
+        "device_ids",
         "area_id",
         "name",
         "domain",
@@ -144,6 +145,23 @@ def _all_devices(dev_reg: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
         item if isinstance(item, dr.DeviceEntry) else dev_reg.devices[item]
         for item in dev_reg.devices
     ]
+
+
+#: Integrations whose devices and entities are never things in the house.
+ALWAYS_SKIPPED_INTEGRATIONS: frozenset[str] = frozenset({"hacs"})
+
+
+def _primary_device(members: list[dr.DeviceEntry]) -> dr.DeviceEntry:
+    """Pick the part of a split device that speaks for it."""
+    for member in members:
+        if (
+            getattr(member, "config_entry_id", None)
+            == getattr(member, "composite_primary_config_entry", None)
+            and member.composite_primary_config_entry
+        ):
+            return member
+    named = [m for m in members if m.name_by_user]
+    return min(named or members, key=lambda m: m.id)
 
 
 def _digest(text: str) -> str:
@@ -223,6 +241,9 @@ class Doc:
     managed: dict[str, Any] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    #: Tell apart notes whose names collide, most readable first: "Box (Shelly)"
+    #: rather than "Box (a1b2c3)".
+    qualifiers: list[str] = field(default_factory=list)
 
     @property
     def key(self) -> DocKey:
@@ -280,12 +301,23 @@ def tag_part(name: str) -> str:
     return re.sub(r"[^\w]+", "-", name, flags=re.UNICODE).strip("-") or "Other"
 
 
-def _stem_matches(stem: str, base: str) -> bool:
-    """Return whether an existing file name still fits the object's name."""
-    return (
-        stem == base
-        or re.fullmatch(re.escape(base) + r" \([0-9a-f]{6,}\)", stem) is not None
-    )
+def _name_candidates(doc: Doc) -> list[str]:
+    """File names a note may have, in order of preference."""
+    return [
+        doc.stem,
+        *(f"{doc.stem} ({q})" for q in doc.qualifiers),
+        f"{doc.stem} ({doc.ha_id[:6]})",
+    ]
+
+
+def _stem_matches(stem: str, doc: Doc) -> bool:
+    """Return whether an existing file name still fits the object's name.
+
+    The short-ID form only fits when there is nothing more readable to use, so
+    notes named that way by earlier versions move to their readable name.
+    """
+    candidates = _name_candidates(doc)
+    return stem in (candidates if not doc.qualifiers else candidates[:-1])
 
 
 def merge_frontmatter(
@@ -353,6 +385,10 @@ class NotesVault:
         #: Display names of integrations and entity domains ("air_quality" is
         #: "Air Quality"), used for readable tags. Filled before each sync.
         self._integration_names: dict[str, str] = {}
+        #: Registry device ID -> the note key of the physical device it belongs to,
+        #: and back to the device whose page represents it.
+        self._device_group: dict[str, str] = {}
+        self._group_primary: dict[str, str] = {}
         #: Display name of every generated note, by path, as of the last sync. The
         #: panel asks for these on every click; rebuilding them means walking every
         #: registry.
@@ -566,51 +602,100 @@ class NotesVault:
             }
             docs[doc.key] = doc
 
+        # Since 2026.9 a device served by several integrations is split into one
+        # registry device per integration, linked by composite_device_id. It's one
+        # thing in the house, so it gets one note.
+        groups: dict[str, list[dr.DeviceEntry]] = {}
         for device in _all_devices(dev_reg):
-            name = device.name_by_user or device.name or device.model or device.id
+            group = getattr(device, "composite_device_id", None) or device.id
+            groups.setdefault(group, []).append(device)
+        self._device_group = {d.id: key for key, ds in groups.items() for d in ds}
+        self._group_primary = {}
+
+        for group, members in groups.items():
+            primary = _primary_device(members)
+            self._group_primary[group] = primary.id
             integrations = sorted(
                 {
                     entry.domain
-                    for entry_id in device.config_entries
+                    for member in members
+                    for entry_id in member.config_entries
                     if (entry := self.hass.config_entries.async_get_entry(entry_id))
                 }
             )
+            # HACS makes a device of every repository it installs: not things in
+            # the house.
+            if integrations and set(integrations) <= ALWAYS_SKIPPED_INTEGRATIONS:
+                continue
+            labels = set().union(*(m.labels for m in members))
+            area_id = primary.area_id or next(
+                (m.area_id for m in members if m.area_id), None
+            )
+            area = area_reg.async_get_area(area_id) if area_id else None
+            names = [self._integration_name(d) for d in integrations]
+            name = (
+                primary.name_by_user
+                or next((m.name_by_user for m in members if m.name_by_user), None)
+                or primary.name
+                or next((m.name for m in members if m.name), None)
+                or primary.model
+                or primary.manufacturer
+                or (f"{names[0]} device" if names else group)
+            )
             wanted = (
                 opts[CONF_GENERATE_DEVICES]
-                and device.id not in exclude_devices
-                and not (device.labels & exclude_labels)
+                and not {m.id for m in members} & exclude_devices
+                and not (labels & exclude_labels)
                 and not (integrations and set(integrations) <= exclude_integrations)
-                and (opts[CONF_INCLUDE_DISABLED] or device.disabled_by is None)
+                and (
+                    opts[CONF_INCLUDE_DISABLED]
+                    or any(m.disabled_by is None for m in members)
+                )
             )
+            stem = safe_name(name)
             doc = Doc(
                 kind=KIND_DEVICE,
-                ha_id=device.id,
+                ha_id=group,
                 name=name,
                 folder=self._folder(KIND_DEVICE),
-                stem=safe_name(name),
+                stem=stem,
                 wanted=bool(wanted),
                 aliases=[name],
                 tags=[
                     f"{TAG_ROOT}/Device",
-                    *(
-                        f"{TAG_ROOT}/Device/{tag_part(self._integration_name(d))}"
-                        for d in integrations
-                    ),
+                    *(f"{TAG_ROOT}/Device/{tag_part(n)}" for n in names),
                 ],
+                qualifiers=list(
+                    dict.fromkeys(
+                        q
+                        for q in (
+                            safe_name(area.name) if area else None,
+                            safe_name(primary.model) if primary.model else None,
+                            safe_name(primary.manufacturer)
+                            if primary.manufacturer
+                            else None,
+                            safe_name(", ".join(names)) if names else None,
+                        )
+                        if q and q != stem
+                    )
+                ),
             )
             doc.managed = {
                 "ha_type": KIND_DEVICE,
-                "ha_id": device.id,
-                "device_id": device.id,
+                "ha_id": group,
+                "device_id": primary.id,
+                "device_ids": sorted(m.id for m in members)
+                if len(members) > 1
+                else None,
                 "name": name,
-                "manufacturer": device.manufacturer,
-                "model": device.model,
+                "manufacturer": primary.manufacturer,
+                "model": primary.model,
                 "integration": integrations,
-                "labels": label_names(device.labels),
-                "ha_url": self._url(f"/config/devices/device/{device.id}"),
+                "labels": label_names(labels),
+                "ha_url": self._url(f"/config/devices/device/{primary.id}"),
                 # Filled in once every path is known.
-                "area": device.area_id,
-                "via_device": device.via_device_id,
+                "area": area_id,
+                "via_device": self._device_group.get(primary.via_device_id or ""),
             }
             docs[doc.key] = doc
 
@@ -626,6 +711,8 @@ class NotesVault:
                 or (state.name if state else None)
                 or entry.entity_id
             )
+            if entry.platform in ALWAYS_SKIPPED_INTEGRATIONS:
+                continue
             wanted = (
                 opts[CONF_GENERATE_ENTITIES]
                 and entry.entity_id not in exclude_entities
@@ -653,7 +740,7 @@ class NotesVault:
             doc.managed.update(
                 {
                     "integration": entry.platform,
-                    "device": entry.device_id,
+                    "device": self._device_group.get(entry.device_id or ""),
                     "area": entry.area_id or (device.area_id if device else None),
                     "labels": label_names(entry.labels),
                     "device_class": entry.device_class or entry.original_device_class,
@@ -863,16 +950,20 @@ class NotesVault:
             # moved or renamed in Obsidian stays where they put it. A note in the
             # wrong generated folder (an automation among the entities) moves.
             if parent in generated and (
-                parent != doc.folder or not _stem_matches(current_stem, doc.stem)
+                parent != doc.folder or not _stem_matches(current_stem, doc)
             ):
                 pending.append(doc)
                 continue
             planned[key] = current
             taken.add(current.lower())
         for doc in sorted(pending, key=lambda d: d.ha_id):
-            path = f"{doc.folder}/{doc.stem}{MARKDOWN_SUFFIX}"
-            if path.lower() in taken:
-                path = f"{doc.folder}/{doc.stem} ({doc.ha_id[:6]}){MARKDOWN_SUFFIX}"
+            path = next(
+                p
+                for p in (
+                    f"{doc.folder}/{c}{MARKDOWN_SUFFIX}" for c in _name_candidates(doc)
+                )
+                if p.lower() not in taken
+            )
             planned[doc.key] = path
             taken.add(path.lower())
         return planned
@@ -1155,7 +1246,9 @@ class NotesVault:
                     translation_key="unknown_device",
                     translation_placeholders={"target": device_id},
                 )
-            return (KIND_DEVICE, device_id)
+            if device_id not in self._device_group:
+                self.build_docs()
+            return (KIND_DEVICE, self._device_group.get(device_id, device_id))
         if area_id:
             if ar.async_get(self.hass).async_get_area(area_id) is None:
                 raise ServiceValidationError(
@@ -1803,7 +1896,7 @@ class NotesVault:
                 entry = er.async_get(self.hass).async_get(ha_id)
                 data["entity_id"] = entry.entity_id if entry else ha_id
             elif kind == KIND_DEVICE:
-                data["device_id"] = ha_id
+                data["device_id"] = self._group_primary.get(ha_id, ha_id)
             elif kind == KIND_AREA:
                 data["area_id"] = ha_id
             else:

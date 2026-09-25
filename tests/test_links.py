@@ -32,34 +32,41 @@ async def test_integration_note_links_devices_and_deviceless_entities(
     hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
 ) -> None:
     """A device without an area, and an entity without a device, meet at the integration."""
-    entry = MockConfigEntry(domain="hacs")
+    entry = MockConfigEntry(domain="shelly")
     entry.add_to_hass(hass)
     repo = dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id, identifiers={("hacs", "1")}, name="button-card"
+        config_entry_id=entry.entry_id,
+        identifiers={("shelly", "1")},
+        name="Garden relay",
     )
-    # Its only entity is an update entity marked as configuration, so it has no
-    # note of its own and the device would otherwise link to nothing.
+    # Its only entity is a configuration entity, so it has no note of its own and
+    # the device would otherwise link to nothing.
     er.async_get(hass).async_get_or_create(
         "update",
-        "hacs",
+        "shelly",
         "1-update",
         device_id=repo.id,
         config_entry=entry,
         entity_category=er.EntityCategory.CONFIG,
     )
     loose = er.async_get(hass).async_get_or_create(
-        "sensor", "hacs", "pending", config_entry=entry, suggested_object_id="hacs"
+        "sensor",
+        "shelly",
+        "cloud",
+        config_entry=entry,
+        suggested_object_id="shelly_cloud",
     )
     hass.states.async_set(loose.entity_id, "0")
     await manager.async_sync()
 
-    # HACS isn't installed here, so the name falls back to the domain.
-    hacs = frontmatter(vault_dir, f"{BASE}/Integrations/Hacs")
-    assert hacs["ha_type"] == "integration"
-    assert hacs["ha_id"] == "hacs"
-    assert hacs["devices"] == [f"[[{BASE}/Devices/button-card|button-card]]"]
-    assert hacs["entities"] == [f"[[{BASE}/Entities/sensor.hacs|hacs]]"]
-    assert hacs["ha_url"].endswith("/config/integrations/integration/hacs")
+    shelly = frontmatter(vault_dir, f"{BASE}/Integrations/Shelly")
+    assert shelly["ha_type"] == "integration"
+    assert shelly["ha_id"] == "shelly"
+    assert shelly["devices"] == [f"[[{BASE}/Devices/Garden relay|Garden relay]]"]
+    assert shelly["entities"] == [
+        f"[[{BASE}/Entities/sensor.shelly_cloud|shelly cloud]]"
+    ]
+    assert shelly["ha_url"].endswith("/config/integrations/integration/shelly")
 
     # Entities of a device reach the integration through the device, so the
     # integration doesn't list the lamp, only its device.
@@ -67,8 +74,8 @@ async def test_integration_note_links_devices_and_deviceless_entities(
     assert hue["devices"] == [f"[[{BASE}/Devices/Ceiling lamp|Ceiling lamp]]"]
     assert "entities" not in hue
 
-    target = manager.ha_target(f"{BASE}/Integrations/Hacs.md")
-    assert target == {"type": "integration", "id": "hacs"}
+    target = manager.ha_target(f"{BASE}/Integrations/Shelly.md")
+    assert target == {"type": "integration", "id": "shelly"}
 
 
 async def test_group_members_are_linked(

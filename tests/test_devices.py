@@ -1,0 +1,99 @@
+"""Device notes: one per physical device, no HACS repositories, readable names."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import attr
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.notes_vault.manager import NotesVault
+from custom_components.notes_vault.vault import parse_note
+
+DEVICES = "Home Assistant/Devices"
+
+
+def _entry(hass: HomeAssistant, domain: str) -> MockConfigEntry:
+    entry = MockConfigEntry(domain=domain)
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_hacs_repositories_are_skipped(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """HACS makes a device per repository; none of them get a note."""
+    entry = _entry(hass, "hacs")
+    repo = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("hacs", "1")}, name="card-mod"
+    )
+    er.async_get(hass).async_get_or_create(
+        "update", "hacs", "1", device_id=repo.id, config_entry=entry
+    )
+    await manager.async_sync()
+    assert not (vault_dir / f"{DEVICES}/card-mod.md").exists()
+    assert not list((vault_dir / "Home Assistant/Entities").glob("update.*"))
+
+
+async def test_split_device_is_one_note(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """The parts of a device split per integration share one note."""
+    reg = dr.async_get(hass)
+    esphome, bluetooth = _entry(hass, "esphome"), _entry(hass, "bluetooth")
+    main = reg.async_get_or_create(
+        config_entry_id=esphome.entry_id, identifiers={("esphome", "p")}, name="Proxy"
+    )
+    part = reg.async_get_or_create(
+        config_entry_id=bluetooth.entry_id,
+        identifiers={("bluetooth", "p")},
+        name="Proxy",
+    )
+    # What 2026.9's migration leaves behind: both parts point at the old device.
+    for device in (main, part):
+        reg.devices[device.id] = attr.evolve(device, composite_device_id="old")
+    await manager.async_sync()
+
+    notes = sorted(p.name for p in (vault_dir / DEVICES).glob("Proxy*.md"))
+    assert notes == ["Proxy.md"]
+    fm = parse_note((vault_dir / f"{DEVICES}/Proxy.md").read_text()).frontmatter
+    assert fm["ha_id"] == "old"
+    assert sorted(fm["device_ids"]) == sorted([main.id, part.id])
+    assert sorted(fm["integration"]) == ["bluetooth", "esphome"]
+    # Either part's page finds the note.
+    assert manager.resolve_target(device_id=part.id) == ("device", "old")
+
+
+async def test_colliding_names_use_something_readable(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """Two devices with one name are told apart by area, then model."""
+    reg = dr.async_get(hass)
+    entry = _entry(hass, "shelly")
+    garage = ar.async_get(hass).async_create("Garage")
+    for n, area in (("1", garage.id), ("2", None)):
+        device = reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("shelly", n)},
+            name="Relay",
+            model="Plus 1",
+        )
+        reg.async_update_device(device.id, area_id=area)
+    unnamed = reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("shelly", "3")},
+        model="Plug S",
+    )
+    # Some integrations report an empty name (a zte router, on a real install).
+    reg.async_update_device(unnamed.id, name="")
+    await manager.async_sync()
+
+    names = sorted(p.stem for p in (vault_dir / DEVICES).glob("*.md"))
+    assert "Relay" in names
+    assert "Relay (Garage)" in names or "Relay (Plus 1)" in names
+    assert "Plug S" in names
+    assert not any(unnamed.id[:6] in n for n in names)
