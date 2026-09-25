@@ -188,7 +188,9 @@ async def ws_tree(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
 async def ws_search(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Search the vault."""
     results = await hass.async_add_executor_job(
-        lambda: manager.vault.search(msg["query"], limit=msg["limit"])
+        lambda: manager.vault.search(
+            msg["query"], limit=msg["limit"], skip=frozenset({manager.index_path})
+        )
     )
     return {"results": results}
 

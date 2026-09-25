@@ -216,6 +216,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                     call.data[ATTR_QUERY],
                     limit=call.data[ATTR_LIMIT],
                     folder=call.data[ATTR_FOLDER],
+                    skip=frozenset({manager.index_path}),
                 )
             )
         except InvalidPathError as err:

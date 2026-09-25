@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import (
     area_registry as ar,
 )
@@ -297,6 +297,7 @@ class NotesVault:
         self.lock = asyncio.Lock()
         self._unsubs: list[Callable[[], None]] = []
         self._debouncer: Debouncer | None = None
+        self._index_debouncer: Debouncer | None = None
         self.last_sync: dict[str, int] = {}
         self._base_url: str | None = None
         #: Display names of integrations and entity domains ("air_quality" is
@@ -322,6 +323,13 @@ class NotesVault:
             immediate=False,
             function=self.async_sync,
         )
+        self._index_debouncer = Debouncer(
+            self.hass,
+            _LOGGER,
+            cooldown=SYNC_DEBOUNCE,
+            immediate=False,
+            function=self.async_write_index,
+        )
         for event_type in (
             er.EVENT_ENTITY_REGISTRY_UPDATED,
             dr.EVENT_DEVICE_REGISTRY_UPDATED,
@@ -346,8 +354,9 @@ class NotesVault:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
-        if self._debouncer:
-            self._debouncer.async_cancel()
+        for debouncer in (self._debouncer, self._index_debouncer):
+            if debouncer:
+                debouncer.async_cancel()
 
     @callback
     def _is_add_or_remove(self, data: Mapping[str, Any]) -> bool:
@@ -910,6 +919,7 @@ class NotesVault:
             plans = self._plan_templates(docs, templates)
             stats = await self.hass.async_add_executor_job(self._apply, docs, plans)
         self._store.async_delay_save(lambda: self._prefill, 5)
+        await self.async_write_index()
         self.last_sync = stats
         if any(stats[k] for k in ("created", "updated", "renamed", "deleted")):
             _LOGGER.debug("Vault sync: %s", stats)
@@ -937,7 +947,7 @@ class NotesVault:
             if entry:
                 return (KIND_ENTITY, entry.id)
             if self.hass.states.get(entity_id) is None:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="unknown_entity",
                     translation_placeholders={"target": entity_id},
@@ -945,7 +955,7 @@ class NotesVault:
             return (KIND_ENTITY, entity_id)
         if device_id:
             if dr.async_get(self.hass).async_get(device_id) is None:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="unknown_device",
                     translation_placeholders={"target": device_id},
@@ -953,13 +963,15 @@ class NotesVault:
             return (KIND_DEVICE, device_id)
         if area_id:
             if ar.async_get(self.hass).async_get_area(area_id) is None:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="unknown_area",
                     translation_placeholders={"target": area_id},
                 )
             return (KIND_AREA, area_id)
-        raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_target")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key="no_target"
+        )
 
     async def async_get_note(self, key: DocKey) -> dict[str, Any]:
         """Return the note attached to an object."""
@@ -1062,7 +1074,8 @@ class NotesVault:
         )
         found: list[dict[str, str]] = []
         for other in self.vault.iter_markdown():
-            if other == path:
+            # The index links everything; listing it everywhere would be noise.
+            if other in (path, self.index_path):
                 continue
             try:
                 text = self.vault.read_text(other)
@@ -1250,7 +1263,7 @@ class NotesVault:
         async with self.lock:
             docs = self.build_docs()
             if key not in docs:
-                raise HomeAssistantError(
+                raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="no_target"
                 )
             path = await self.hass.async_add_executor_job(
@@ -1282,6 +1295,101 @@ class NotesVault:
         self.vault.write_text(path, text)
         self._written.pop(key, None)
         return path
+
+    # -- Index ---------------------------------------------------------------------
+
+    @property
+    def index_path(self) -> str:
+        """The generated note listing every note with something written in it."""
+        return f"{self.base}/Index.md" if self.base else "Index.md"
+
+    @callback
+    def _schedule_index(self) -> None:
+        if self._index_debouncer:
+            self._index_debouncer.async_schedule_call()
+
+    async def async_write_index(self) -> None:
+        """Rewrite the index note if what it lists changed."""
+        async with self.lock:
+            await self.hass.async_add_executor_job(self._write_index)
+
+    def _index_entries(self) -> dict[str, list[tuple[str, str]]]:
+        """Group every note worth listing by category. Runs in the executor.
+
+        Generated notes still holding their untouched template are left out: the
+        index is for finding what has actually been written.
+        """
+        by_path = {path: key for key, path in self.index.items()}
+        skip = f"{self.templates_folder}/"
+        sections: dict[str, list[tuple[str, str]]] = {}
+        for path in self.vault.iter_markdown():
+            if path == self.index_path or path.startswith(skip):
+                continue
+            try:
+                note = self.vault.read_note(path)
+            except (OSError, VaultError):
+                continue
+            label = str(
+                note.frontmatter.get("name") or PurePosixPath(link_target(path)).name
+            )
+            if key := by_path.get(path):
+                if self._is_untouched(key, note.body):
+                    continue
+                kind = key[0]
+                if kind == KIND_ENTITY:
+                    domain = str(note.frontmatter.get("domain") or "")
+                    section = DOMAIN_FOLDERS.get(domain) or KIND_FOLDERS[kind]
+                else:
+                    section = KIND_FOLDERS[kind]
+            else:
+                if not note.body.strip():
+                    continue
+                folder = PurePosixPath(path).parent.as_posix()
+                section = f"Notes/{'' if folder == '.' else folder}"
+            sections.setdefault(section, []).append((label, path))
+        return sections
+
+    def _render_index(self, sections: dict[str, list[tuple[str, str]]]) -> str:
+        lines = [
+            "# Notes index",
+            "",
+            "Every note with something written in it. Home Assistant keeps this list "
+            "up to date, so edits here are overwritten.",
+        ]
+
+        def items(entries: list[tuple[str, str]]) -> list[str]:
+            ordered = sorted(entries, key=lambda e: (e[0].lower(), e[1]))
+            return [f"- {wikilink(path, label)}" for label, path in ordered]
+
+        own = sorted(k for k in sections if k.startswith("Notes/"))
+        if own:
+            lines += ["", "## Your notes"]
+            for section in own:
+                folder = section.removeprefix("Notes/")
+                lines += ["", f"### {folder}", ""] if folder else [""]
+                lines += items(sections[section])
+        order = [
+            KIND_FOLDERS[KIND_AREA],
+            KIND_FOLDERS[KIND_DEVICE],
+            *DOMAIN_FOLDERS.values(),
+            KIND_FOLDERS[KIND_ENTITY],
+        ]
+        for section in order:
+            if section in sections:
+                lines += ["", f"## {section}", "", *items(sections[section])]
+        if len(lines) == 3:
+            lines += ["", "Nothing written yet."]
+        return render_note({"ha_type": "index"}, "\n".join(lines) + "\n")
+
+    def _write_index(self) -> None:
+        """Write the index, only when it changed. Runs in the executor."""
+        text = self._render_index(self._index_entries())
+        try:
+            if self.vault.read_text(self.index_path) == text:
+                return
+        except VaultError:
+            pass
+        self.vault.write_text(self.index_path, text)
 
     # -- Templates -----------------------------------------------------------------
 
@@ -1447,6 +1555,7 @@ class NotesVault:
             else:
                 data["area_id"] = ha_id
         self.hass.bus.async_fire(EVENT_NOTE_UPDATED, data)
+        self._schedule_index()
 
     @callback
     def file_changed(self, path: str, source: str) -> None:
@@ -1466,7 +1575,8 @@ class NotesVault:
             if indexed == path or indexed.startswith(prefix):
                 self.index.pop(key)
                 self._written.pop(key, None)
-        # A generated note deleted in Obsidian comes back empty on the next sync.
+        # A generated note deleted in Obsidian comes back empty on the next sync,
+        # which rewrites the index too.
         self._schedule()
 
     @callback

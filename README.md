@@ -159,6 +159,8 @@ devices:
 
 Because those are links, the heat pump's backlinks in Obsidian list every automation, script and scene that controls it, and the graph shows the home's logic wired to its devices.
 
+`Home Assistant/Index.md` lists every note with something written in it, grouped into your own notes (by folder), areas, devices, automations, scripts, scenes and entities. Notes still holding their untouched template are left out, so it's the quickest way to see what you (or an assistant) have actually written down. It's regenerated as notes change; don't edit it.
+
 Removing an entity, device or area from Home Assistant never costs you what you wrote about it: its note stays, marked `ha_removed: true`. Only notes nobody wrote in are deleted with it.
 
 Everything outside `Home Assistant/` is yours. Notes Vault never touches it except to follow renames of the generated notes.

@@ -177,3 +177,30 @@ async def test_str_subclass_names_are_plain(
     await manager.async_sync()
     fm = _read(vault_dir, f"{ENTITIES}/sensor.odd.md").frontmatter
     assert fm["aliases"] == ["Odd one"]
+
+
+async def test_index_lists_written_notes_only(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """The index groups every note with content and skips untouched templates."""
+    index = vault_dir / "Home Assistant/Index.md"
+    assert "Nothing written yet." in index.read_text()
+
+    await manager.async_set_note(("device", home["device"].id), "Bulb is E27.")
+    (vault_dir / "Projects").mkdir()
+    (vault_dir / "Projects/Wallbox.md").write_text("Plan it.\n")
+    (vault_dir / "Loose.md").write_text("Top level.\n")
+    await manager.async_write_index()
+
+    text = index.read_text()
+    assert "## Your notes" in text
+    assert "- [[Loose]]" in text
+    assert "### Projects\n\n- [[Projects/Wallbox|Wallbox]]" in text
+    assert f"## Devices\n\n- [[{DEVICES}/Ceiling lamp|Ceiling lamp]]" in text
+    # Pre-filled but untouched: not listed.
+    assert "light.kitchen_ceiling" not in text
+    assert "Kitchen" not in text
+
+    # Written notes don't list the index among the notes linking to them.
+    result = await manager.async_get_file(f"{DEVICES}/Ceiling lamp.md")
+    assert all(b["path"] != "Home Assistant/Index.md" for b in result["backlinks"])

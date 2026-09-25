@@ -348,7 +348,12 @@ class Vault:
         return parse_note(text).frontmatter
 
     def search(
-        self, query: str, *, limit: int = 20, folder: str = ""
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        folder: str = "",
+        skip: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """Find notes whose path or content contains every word of the query."""
         words = [w.lower() for w in query.split() if w]
@@ -356,6 +361,8 @@ class Vault:
             return []
         results: list[tuple[int, dict[str, Any]]] = []
         for path in self.iter_markdown(folder):
+            if path in skip:
+                continue
             try:
                 text = self.read_text(path)
             except VaultError:
