@@ -211,9 +211,9 @@ class NotesVaultNote extends HTMLElement {
         const result = await hass.callWS({ type: "notes_vault/get", ...target });
         if (target !== this._target) return;
         this._state = { ...result, canEdit: info.can_edit };
-        // In the panel, a note that doesn't exist yet is one being created, and one
-        // still holding its untouched template is ready to be filled in.
-        if (target.path && info.can_edit && (!result.exists || result.template)) {
+        // In the panel, a note that doesn't exist yet is one being created. Every
+        // other note opens to read.
+        if (target.path && info.can_edit && !result.exists) {
           this._edit();
           return;
         }
@@ -365,7 +365,7 @@ class NotesVaultNote extends HTMLElement {
       body = `<ha-form></ha-form>${s.error ? `<ha-alert alert-type="error">${escapeHtml(s.error)}</ha-alert>` : ""}`;
     } else if (s.error) {
       body = `<ha-alert alert-type="error">${escapeHtml(s.error)}</ha-alert>`;
-    } else if (s.note) {
+    } else if (s.note || (inPanel && s.template?.body)) {
       body = `<ha-markdown breaks></ha-markdown>`;
     } else {
       body = `<span class="empty">No notes yet.</span>`;
@@ -392,7 +392,8 @@ class NotesVaultNote extends HTMLElement {
           }),
         );
       }
-      actions = extra.join("") + `<span class="spacer"></span>` + this._button("edit", s.note ? "Edit" : "Add note");
+      const hasText = s.note || (inPanel && s.template?.body);
+      actions = extra.join("") + `<span class="spacer"></span>` + this._button("edit", hasText ? "Edit" : "Add note");
     }
 
     const content = `<div class="body">${path}${body}</div>`;
@@ -431,7 +432,9 @@ class NotesVaultNote extends HTMLElement {
     const md = this.shadowRoot.querySelector("ha-markdown");
     if (md) {
       md.hass = this.hass;
-      md.content = renderWikilinks(s.note, s.links, { inPanel, canBrowse: s.canEdit });
+      // The panel shows a note as it is on disk, so an untouched template shows too.
+      const text = s.note || (inPanel ? s.template?.body : "") || "";
+      md.content = renderWikilinks(text, s.links, { inPanel, canBrowse: s.canEdit });
     }
 
     const form = this.shadowRoot.querySelector("ha-form");

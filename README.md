@@ -158,7 +158,7 @@ Obsidian-side MCP servers such as [mcp-obsidian](https://github.com/MarkusPfunds
 
 Every generated note starts out holding its template, so opening `Kitchen.md` in Obsidian gives you the headings to fill in. A note whose body is still exactly its template counts as empty: Home Assistant shows **No notes yet**, filters can remove it, and it's deleted along with its entity. The moment you write in it, it's yours. Edit a template and every note still holding the old one is updated to match, and none of the others.
 
-In Home Assistant, **Add note** starts from the same template, and a **Template** dropdown switches to another one or to a blank note. The Notes panel opens an untouched note straight in the editor.
+In Home Assistant, **Add note** starts from the same template, and a **Template** dropdown switches to another one or to a blank note.
 
 Templates are Markdown files in `Home Assistant/Templates/`, so you edit them in Obsidian like any other note (and Obsidian's own Templates plugin can use the same folder). The defaults cover the common cases:
 
