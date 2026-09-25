@@ -82,8 +82,6 @@ MANAGED_KEYS: frozenset[str] = frozenset(
         "entity_id",
         "device_id",
         "area_id",
-        "title",
-        # Written by versions before 0.1.0, removed on the next sync.
         "name",
         "domain",
         "integration",
@@ -330,7 +328,7 @@ class NotesVault:
                 "ha_type": KIND_AREA,
                 "ha_id": area.id,
                 "area_id": area.id,
-                "title": area.name,
+                "name": area.name,
                 "floor": floor.name if floor else None,
                 "labels": label_names(area.labels),
                 "ha_url": self._url(f"/config/areas/area/{area.id}"),
@@ -367,7 +365,7 @@ class NotesVault:
                 "ha_type": KIND_DEVICE,
                 "ha_id": device.id,
                 "device_id": device.id,
-                "title": name,
+                "name": name,
                 "manufacturer": device.manufacturer,
                 "model": device.model,
                 "integration": integrations,
@@ -470,7 +468,7 @@ class NotesVault:
             "ha_type": KIND_ENTITY,
             "ha_id": ha_id,
             "entity_id": entity_id,
-            "title": name,
+            "name": name,
             "domain": domain,
             "ha_url": self._url(f"/history?entity_id={entity_id}"),
         }
@@ -583,7 +581,7 @@ class NotesVault:
             if note and not note.valid:
                 _LOGGER.warning("Skipping %s: its frontmatter is not valid YAML", path)
                 return "unchanged"
-        merged = merge_frontmatter(current_fm, doc, current_fm.get("title"))
+        merged = merge_frontmatter(current_fm, doc, current_fm.get("name"))
         if mtime is not None and merged == current_fm:
             return "unchanged"
         if note is None and mtime is not None:

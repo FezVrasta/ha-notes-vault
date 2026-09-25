@@ -75,7 +75,7 @@ A generated note looks like this:
 ha_type: entity
 ha_id: 5f1c…
 entity_id: light.kitchen_ceiling
-title: Ceiling lamp
+name: Ceiling lamp
 domain: light
 integration: hue
 device: '[[Home Assistant/Devices/Ceiling lamp|Ceiling lamp]]'
@@ -115,7 +115,7 @@ Any other WebDAV client works with the same address and credentials (Finder's **
 
 ### Suggested: Front Matter Title
 
-Obsidian shows the file name as a note's title, so an entity note shows up as `light.kitchen_ceiling`. [Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title) shows the `title` key instead, in the file explorer, tabs, graph, search and backlinks, without renaming the file. Its default key is already `title`; turn on the places you want it in its settings.
+Obsidian shows the file name as a note's title, so an entity note shows up as `light.kitchen_ceiling`. [Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title) shows a frontmatter key instead, in the file explorer, tabs, graph, search and backlinks, without renaming the file. In its settings, set **Common main template** to `name` (the key Notes Vault writes the friendly name to), then turn on the places you want it.
 
 Links still work either way: type `[[Ceiling` and pick the alias, and Obsidian inserts `[[light.kitchen_ceiling|Ceiling lamp]]`.
 
@@ -125,7 +125,7 @@ Links still work either way: type `[[Ceiling` and pick the alias, and Obsidian i
 
 ````markdown
 ```dataview
-TABLE title, device FROM #ha/light AND [[Kitchen]]
+TABLE name, device FROM #ha/light AND [[Kitchen]]
 ```
 ````
 

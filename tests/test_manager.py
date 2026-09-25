@@ -37,8 +37,8 @@ async def test_generates_linked_notes(
     fm = light.frontmatter
     assert fm["ha_type"] == "entity"
     assert fm["ha_id"] == home["light"].id
-    # `title` is what the Front Matter Title plugin shows in place of the file name.
-    assert fm["title"] == "Ceiling lamp"
+    # `name` is what the Front Matter Title plugin is set to show instead of the file name.
+    assert fm["name"] == "Ceiling lamp"
     assert fm["device"] == f"[[{DEVICES}/Ceiling lamp|Ceiling lamp]]"
     assert fm["area"] == f"[[{AREAS}/Kitchen|Kitchen]]"
     assert "Ceiling lamp" in fm["aliases"]
@@ -75,7 +75,7 @@ async def test_note_survives_regeneration(
     assert note.body == "Replaced 2026-01-10.\n"
     assert note.frontmatter["bulb"] == "E27"
     assert "mine" in note.frontmatter["tags"]
-    assert note.frontmatter["title"] == "Main light"
+    assert note.frontmatter["name"] == "Main light"
 
 
 async def test_unchanged_files_are_not_rewritten(
@@ -170,16 +170,3 @@ async def test_str_subclass_names_are_plain(
     await manager.async_sync()
     fm = _read(vault_dir, f"{ENTITIES}/sensor.odd.md").frontmatter
     assert fm["aliases"] == ["Odd one"]
-
-
-async def test_legacy_name_key_is_dropped(
-    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
-) -> None:
-    """Notes written before `title` replaced `name` lose the old key on sync."""
-    path = vault_dir / f"{ENTITIES}/light.kitchen_ceiling.md"
-    note = parse_note(path.read_text())
-    path.write_text(render_note({**note.frontmatter, "name": "Old"}, "Body\n"))
-    await manager.async_sync()
-    note = parse_note(path.read_text())
-    assert "name" not in note.frontmatter
-    assert note.body == "Body\n"
