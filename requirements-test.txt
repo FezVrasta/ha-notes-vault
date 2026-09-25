@@ -1,0 +1,8 @@
+# Home Assistant's own test fixtures, packaged for custom components. This pins the
+# Home Assistant version the suite runs against — and, indirectly, the Python version:
+# 0.13.357 is Home Assistant 2026.8, which needs Python 3.14.2 or newer.
+#
+# When you bump this, bump PYTHON_VERSION in .github/workflows/ci.yml and the
+# `homeassistant` floor in hacs.json to match.
+pytest-homeassistant-custom-component==0.13.357
+ruff

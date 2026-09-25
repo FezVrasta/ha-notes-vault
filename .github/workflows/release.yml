@@ -1,0 +1,52 @@
+name: Release
+
+# HACS serves the tagged tree, so the manifest inside the tag is the manifest users
+# install. That makes the version part of the release commit, not something applied
+# afterwards: `scripts/bump-version` writes it and commits, then the tag goes on top.
+#
+# This workflow only checks that the two agree. It deliberately has no write access
+# and commits nothing, because a version written after the tag exists is a version
+# nobody ever installs.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Manifest version matches the tag
+    runs-on: ubuntu-latest
+    steps:
+      # The tag, not main: this checks what HACS will actually hand people.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - name: Compare
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import pathlib
+          import sys
+
+          tag = os.environ["TAG"].removeprefix("v")
+          (manifest_path,) = glob.glob("custom_components/*/manifest.json")
+          version = json.loads(pathlib.Path(manifest_path).read_text()).get("version")
+
+          if version != tag:
+              sys.exit(
+                  f"::error::{manifest_path} says {version!r} but the tag says "
+                  f"{tag!r}. HACS installs the tagged tree, so this release would "
+                  f"report the wrong version. Run scripts/bump-version {tag}, push, "
+                  f"then re-tag."
+              )
+          print(f"{manifest_path} and the tag agree on {version}")
+          PY

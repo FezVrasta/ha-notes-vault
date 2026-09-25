@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Only the actions. The Python pin in requirements-test.txt tracks the Home Assistant
+  # release you choose to test against, which is a judgement call, not a bump to
+  # rubber-stamp — see the comment in that file.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ""

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Everything CI runs, minus hassfest and the HACS action (those need a container).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PY=.venv/bin/python
+[ -x "$PY" ] || { echo "No .venv — run scripts/setup first." >&2; exit 1; }
+
+echo "== ruff"
+"$PY" -m ruff check .
+"$PY" -m ruff format --check .
+
+echo "== translations"
+for dir in custom_components/*/; do
+  diff -u "$dir/strings.json" "$dir/translations/en.json"
+done
+
+echo "== pytest"
+"$PY" -m pytest -q "$@"

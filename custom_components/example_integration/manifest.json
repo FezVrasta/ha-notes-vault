@@ -1,0 +1,17 @@
+{
+  "domain": "example_integration",
+  "name": "Example Integration",
+  "codeowners": [
+    "@FezVrasta"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/FezVrasta/ha-integration-template",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/FezVrasta/ha-integration-template/issues",
+  "loggers": [
+    "example_integration"
+  ],
+  "requirements": [],
+  "version": "0.0.0"
+}

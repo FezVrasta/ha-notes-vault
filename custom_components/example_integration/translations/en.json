@@ -1,0 +1,71 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to your device",
+        "description": "Enter the address of the device on your network.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Access token"
+        },
+        "data_description": {
+          "host": "The hostname or IP address. A static lease or a hostname survives a router reboot; a DHCP address may not.",
+          "token": "Leave empty if the device does not require one."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect",
+        "description": "The saved credentials were rejected. Enter a fresh access token.",
+        "data": {
+          "token": "Access token"
+        }
+      },
+      "reconfigure": {
+        "title": "Change the connection",
+        "description": "Point this device at a new address.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Access token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the device. Check the address and that it is powered on.",
+      "invalid_auth": "The device rejected those credentials.",
+      "unknown": "Something unexpected went wrong."
+    },
+    "abort": {
+      "already_configured": "This device is already set up.",
+      "reauth_successful": "Reconnected.",
+      "reconfigure_successful": "The connection was updated.",
+      "wrong_device": "That address belongs to a different device. Add it as a new entry instead."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {}
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": {
+        "name": "Temperature"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Connectivity"
+      }
+    }
+  },
+  "exceptions": {
+    "cannot_connect": {
+      "message": "Could not reach {host}."
+    }
+  }
+}

@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Turn this template into a named integration.
+
+Renames the placeholder domain everywhere, rewrites the class prefix, points the
+manifest and README at the real repository, and deletes the template's own scaffolding.
+Run it once, immediately after creating a repository from the template.
+
+    scripts/bootstrap --domain growatt_datalogger --name "Growatt Datalogger"
+
+Everything else is inferred: the class prefix from the name, the repository from the
+`origin` remote. Pass --repo to override, or --dry-run to see the plan first.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+PLACEHOLDER_DOMAIN = "example_integration"
+PLACEHOLDER_NAME = "Example Integration"
+PLACEHOLDER_PREFIX = "Example"
+PLACEHOLDER_REPO = "FezVrasta/ha-integration-template"
+
+# Left behind by the template, meaningless in a real integration.
+TEMPLATE_ONLY = ["scripts/bootstrap"]
+
+# The template's own README describes the template. Replace it with a skeleton rather
+# than deleting it — HACS refuses a repository without one.
+README_SKELETON = """\
+<p align="center">
+  <img src="custom_components/{domain}/brand/icon.png" width="128" alt="">
+</p>
+
+<h1 align="center">{name}</h1>
+
+<p align="center">
+  One line saying what this does for the person reading.
+</p>
+
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner={owner}&repository={repo_name}&category=integration">
+    <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open this repository in HACS">
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://github.com/{repo}/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <img src="https://img.shields.io/badge/HACS-custom-41BDF5.svg" alt="HACS custom repository">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+</p>
+
+---
+
+Two or three sentences on the problem this solves, in the reader's terms — what they
+have, what it does not do today, what this changes.
+
+## What you get
+
+| Entity | Reads |
+|---|---|
+| **Temperature** | … |
+
+## Install
+
+Click the badge above (or add this repo to HACS as a custom **Integration**), install,
+restart, then add **{name}** from **Settings → Devices & Services**.
+
+## License
+
+MIT.
+"""
+
+SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".ruff_cache", ".pytest_cache"}
+TEXT_SUFFIXES = {".py", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".cfg"}
+
+
+def die(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def infer_prefix(name: str) -> str:
+    """"Growatt Datalogger" -> "GrowattDatalogger", for class names."""
+    return "".join(word for word in re.split(r"[^A-Za-z0-9]+", name) if word)
+
+
+def infer_repo() -> str | None:
+    """owner/repo from the origin remote, if there is one."""
+    try:
+        url = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", url)
+    return match.group(1) if match else None
+
+
+def walk_files() -> list[Path]:
+    files = []
+    for path in ROOT.rglob("*"):
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        if path.is_file() and (path.suffix in TEXT_SUFFIXES or not path.suffix):
+            files.append(path)
+    return files
+
+
+def reformat() -> None:
+    """Re-run ruff over the renamed source.
+
+    A longer name pushes imports past the line length, so a plain string replacement
+    leaves the tree failing `ruff check` — which would make the first CI run red for a
+    reason that has nothing to do with anything the author wrote.
+    """
+    candidates = [
+        [str(ROOT / ".venv" / "bin" / "ruff")],
+        ["ruff"],
+        ["uvx", "ruff"],
+    ]
+    for ruff in candidates:
+        if not (Path(ruff[0]).exists() or shutil.which(ruff[0])):
+            continue
+        try:
+            subprocess.run([*ruff, "check", "--select", "I", "--fix", "-q", "."],
+                           cwd=ROOT, check=False)
+            subprocess.run([*ruff, "format", "-q", "."], cwd=ROOT, check=False)
+        except OSError:
+            continue
+        print("  ruff   sorted imports and reformatted")
+        return
+    print("  ruff   not found — run `ruff check --fix . && ruff format .` after setup")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--domain",
+        required=True,
+        help="snake_case integration domain, e.g. growatt_datalogger",
+    )
+    parser.add_argument(
+        "--name", required=True, help='Display name, e.g. "Growatt Datalogger"'
+    )
+    parser.add_argument("--prefix", help="Class-name prefix (default: from --name)")
+    parser.add_argument("--repo", help="owner/repo (default: from the origin remote)")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", args.domain):
+        die("the domain must be lowercase letters, digits and underscores")
+    if args.domain == PLACEHOLDER_DOMAIN:
+        die("pick a domain other than the placeholder")
+
+    prefix = args.prefix or infer_prefix(args.name)
+    repo = args.repo or infer_repo()
+    if not repo:
+        die("no origin remote; pass --repo owner/repo")
+
+    component = ROOT / "custom_components" / PLACEHOLDER_DOMAIN
+    if not component.is_dir():
+        die("already bootstrapped — custom_components/example_integration is gone")
+
+    # Longest first: `Example Integration` must be replaced before bare `Example`,
+    # or the second rule eats the first one's left-hand side.
+    replacements = [
+        (PLACEHOLDER_REPO, repo),
+        (PLACEHOLDER_DOMAIN, args.domain),
+        (PLACEHOLDER_NAME, args.name),
+        (PLACEHOLDER_PREFIX, prefix),
+    ]
+
+    print(f"domain  {PLACEHOLDER_DOMAIN} -> {args.domain}")
+    print(f"name    {PLACEHOLDER_NAME} -> {args.name}")
+    print(f"classes {PLACEHOLDER_PREFIX}* -> {prefix}*")
+    print(f"repo    {PLACEHOLDER_REPO} -> {repo}")
+    print()
+
+    changed = 0
+    for path in walk_files():
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            continue
+        new = text
+        for old, replacement in replacements:
+            new = new.replace(old, replacement)
+        if new != text:
+            changed += 1
+            print(f"  rewrite {path.relative_to(ROOT)}")
+            if not args.dry_run:
+                path.write_text(new)
+
+    print(f"\n{changed} files rewritten")
+    print(f"  move    custom_components/{PLACEHOLDER_DOMAIN} -> {args.domain}")
+    print("  reset   README.md to a skeleton")
+    for name in TEMPLATE_ONLY:
+        print(f"  delete  {name}")
+
+    if args.dry_run:
+        print("\ndry run — nothing was written")
+        return
+
+    component.rename(ROOT / "custom_components" / args.domain)
+
+    owner, _, repo_name = repo.partition("/")
+    (ROOT / "README.md").write_text(
+        README_SKELETON.format(
+            domain=args.domain,
+            name=args.name,
+            repo=repo,
+            owner=owner,
+            repo_name=repo_name,
+        )
+    )
+
+    reformat()
+
+    for name in TEMPLATE_ONLY:
+        target = ROOT / name
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+
+    print(
+        "\nDone. Next:\n"
+        "  1. Write README.md — see .claude/skills/readme-style\n"
+        "  2. Fill in manifest.json: integration_type, iot_class, requirements\n"
+        "  3. Replace api.py with the real client\n"
+        "  4. scripts/setup && scripts/test\n"
+        "  5. Replace the placeholder brand icon — see .claude/skills/brand-assets"
+    )
+
+
+if __name__ == "__main__":
+    main()

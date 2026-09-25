@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Create the virtualenv and install the test tooling.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# The Home Assistant version pinned in requirements-test.txt dictates the Python
+# version. Saying so here beats a 200-line pip resolution error.
+PYTHON="${PYTHON:-python3}"
+"$PYTHON" - <<'PY'
+import sys
+if sys.version_info < (3, 14):
+    sys.exit(
+        f"This needs Python 3.14+ (found {sys.version.split()[0]}). "
+        "Install it, or set PYTHON=/path/to/python3.14 and re-run."
+    )
+PY
+
+[ -d .venv ] || "$PYTHON" -m venv .venv
+.venv/bin/pip install --upgrade pip --quiet
+.venv/bin/pip install -r requirements-test.txt
+
+echo "Ready. Run scripts/test."

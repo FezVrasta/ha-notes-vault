@@ -1,0 +1,47 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      description: From Settings → Devices & Services, or the tag you installed in HACS.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.8.3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        Settings → System → Logs, filtered to this integration. Turn on debug logging
+        first (the "Enable debug logging" button on the integration page) and reproduce
+        the problem — the default level rarely says enough.
+      render: text
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >-
+        Attach the file from the integration page's ⋮ menu → "Download diagnostics".
+        Serial numbers and credentials are redacted automatically. This is usually the
+        single most useful thing in the report.

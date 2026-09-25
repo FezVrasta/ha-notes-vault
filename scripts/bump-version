@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Set the integration's version, ready to be tagged.
+
+    scripts/bump-version 0.13.0
+
+Writes `manifest.json` and commits it. Run this *before* creating the release.
+
+HACS serves the tagged tree, so the manifest inside the tag is the manifest users
+install. A version written after the tag exists is a version nobody ever sees: the
+release says v0.13.0 while every installation reports the release before it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def git(*args: str) -> str:
+    """Run git in the repository root and return its stdout."""
+    return subprocess.run(
+        ["git", *args], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def main() -> None:
+    """Write the version into the manifest and commit it."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("version", help="the new version, without a v prefix")
+    args = parser.parse_args()
+
+    version = args.version.removeprefix("v")
+    if not SEMVER.match(version):
+        raise SystemExit(f"not a version: {args.version!r} (want X.Y.Z)")
+
+    tag = f"v{version}"
+    if tag in git("tag", "--list").splitlines():
+        raise SystemExit(f"{tag} already exists. Pick the next version.")
+
+    (manifest_path,) = glob.glob("custom_components/*/manifest.json", root_dir=ROOT)
+    path = ROOT / manifest_path
+
+    # Anything else staged would end up in the version commit.
+    if git("diff", "--staged", "--name-only"):
+        raise SystemExit("something is already staged. Commit or reset it first.")
+
+    dirty = [
+        line[3:]
+        for line in git("status", "--porcelain").splitlines()
+        if line[3:] != manifest_path
+    ]
+    if dirty:
+        raise SystemExit(
+            "the working tree is not clean:\n  " + "\n  ".join(dirty) + "\n"
+            "Release from a clean tree, so the tag is what you tested."
+        )
+
+    manifest = json.loads(path.read_text())
+    previous = manifest.get("version")
+    if previous == version:
+        raise SystemExit(f"manifest already says {version}. Nothing to do.")
+
+    manifest["version"] = version
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    git("add", manifest_path)
+    git("commit", "-m", f"Set version to {tag}")
+    print(f"{manifest_path}: {previous} -> {version}")
+    print(f"committed. Next:\n  git push origin main\n  gh release create {tag} ...")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
