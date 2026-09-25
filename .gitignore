@@ -8,5 +8,3 @@ __pycache__/
 venv/
 .DS_Store
 
-# Local Home Assistant used for manual testing
-dev/

@@ -37,7 +37,9 @@ DEFAULT_OPTIONS: Final = {
     CONF_INCLUDE_DISABLED: False,
     CONF_INCLUDE_DIAGNOSTIC: False,
     CONF_INCLUDE_CONFIG: False,
-    CONF_EXCLUDE_DOMAINS: [],
+    # Feeds (earthquakes, fires, weather alerts) create and drop these by the minute.
+    # A note per event is noise, and each one would be one more file to sync.
+    CONF_EXCLUDE_DOMAINS: ["geo_location"],
     CONF_EXCLUDE_INTEGRATIONS: [],
     CONF_EXCLUDE_LABELS: [],
     CONF_EXCLUDE_ENTITIES: [],
