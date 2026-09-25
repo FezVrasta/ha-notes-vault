@@ -84,3 +84,6 @@ DOMAIN_FOLDERS: Final = {
 #: Seconds to wait after a registry change before regenerating, so a burst of changes
 #: (an integration adding fifty entities) becomes one pass over the vault.
 SYNC_DEBOUNCE: Final = 5.0
+
+#: Days a deleted note, or a replaced version of one, stays in the vault's trash.
+TRASH_DAYS: Final = 30

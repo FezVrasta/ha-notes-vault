@@ -55,6 +55,24 @@ def _etag(info: FileInfo) -> str:
     return '"' + hashlib.sha1(raw, usedforsecurity=False).hexdigest() + '"'
 
 
+def _precondition_failed(request: web.Request, info: FileInfo | None) -> bool:
+    """Return whether `If-Match` or `If-None-Match` rule out this write.
+
+    A client that sends the ETag it last saw gets a 412 instead of overwriting a
+    change made since, by Home Assistant or an assistant.
+    """
+    current = _etag(info) if info else None
+    if (if_match := request.headers.get(hdrs.IF_MATCH)) is not None:
+        tags = {t.strip() for t in if_match.split(",")}
+        if current is None or ("*" not in tags and current not in tags):
+            return True
+    if (if_none_match := request.headers.get(hdrs.IF_NONE_MATCH)) is not None:
+        tags = {t.strip() for t in if_none_match.split(",")}
+        if current is not None and ("*" in tags or current in tags):
+            return True
+    return False
+
+
 def _href(vault_path: str | None, is_dir: bool) -> str:
     if vault_path is None:
         return f"{DAV_URL}/"
@@ -355,6 +373,12 @@ class NotesVaultDavView(HomeAssistantView):
             if len(chunks) > MAX_UPLOAD:
                 return web.Response(status=413)
         async with manager.lock:
+            try:
+                current = await self._run(manager.vault.stat, path)
+            except NotFoundError:
+                current = None
+            if _precondition_failed(request, current):
+                return web.Response(status=412)
             created = await self._run(
                 manager.vault.write_bytes, path, chunks, make_parents=False
             )
@@ -387,7 +411,9 @@ class NotesVaultDavView(HomeAssistantView):
         if not path:
             return web.Response(status=403)
         async with manager.lock:
-            await self._run(manager.vault.delete, path)
+            # A sync client deleting a note is the easiest way to lose one, so it goes
+            # to the trash like a delete from Home Assistant does.
+            await self._run(manager.vault.trash, path)
         manager.file_removed(path)
         return web.Response(status=204)
 

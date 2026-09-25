@@ -231,7 +231,10 @@ class NotesVaultNote extends HTMLElement {
     this._state = { ...this._state, saving: true, error: undefined };
     this._render();
     try {
-      const result = await this.hass.callWS({ type: "notes_vault/set", note, ...this._target });
+      // The version being edited, so a save can't silently replace a change made
+      // meanwhile by an assistant, Obsidian or another tab.
+      const mtime = this._state.exists ? (this._state.mtime ?? null) : null;
+      const result = await this.hass.callWS({ type: "notes_vault/set", note, mtime, ...this._target });
       this._state = { ...result, canEdit: this._state.canEdit };
       this._fire("notes-vault-changed", { path: result.path });
     } catch (err) {

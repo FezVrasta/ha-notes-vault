@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -24,6 +25,10 @@ _FRONTMATTER = re.compile(
 )
 
 MARKDOWN_SUFFIX = ".md"
+
+#: Where deleted notes and replaced versions go. The same folder Obsidian moves
+#: deleted notes to, and hidden, so nothing else in the vault sees it.
+TRASH_FOLDER = ".trash"
 
 
 class VaultError(Exception):
@@ -40,6 +45,10 @@ class NotFoundError(VaultError):
 
 class ConflictError(VaultError):
     """The operation clashes with what is on disk (missing parent, existing target)."""
+
+
+class StaleError(VaultError):
+    """The file changed since the version a write was based on."""
 
 
 @dataclass(slots=True)
@@ -282,6 +291,78 @@ class Vault:
         if not parents and not full.parent.is_dir():
             raise ConflictError(path)
         full.mkdir(parents=parents)
+
+    def check_unchanged(self, path: str, mtime: float | None) -> None:
+        """Refuse a write based on a version of the file that is no longer current.
+
+        `mtime` is the modification time the writer read. None means the writer
+        believed the file didn't exist yet.
+        """
+        full = self.resolve(path)
+        current = full.stat().st_mtime if full.is_file() else None
+        if current != mtime:
+            raise StaleError(path)
+
+    def trash(self, path: str) -> str:
+        """Move a file or folder to the trash instead of deleting it.
+
+        Returns where it went. Anything already in the trash is deleted for good.
+        """
+        rel = self.normalize(path)
+        if rel == TRASH_FOLDER or rel.startswith(f"{TRASH_FOLDER}/"):
+            self.delete(rel)
+            return rel
+        full = self.resolve(rel)
+        if full.resolve() == self.root.resolve():
+            raise InvalidPathError(path)
+        if not full.exists():
+            raise NotFoundError(path)
+        dest = self._trash_path(PurePosixPath(rel).name, is_dir=full.is_dir())
+        target = self.resolve(dest)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        full.rename(target)
+        # The age the trash is emptied by is the time it was thrown away, not the
+        # time the file was last edited.
+        os.utime(target)
+        return dest
+
+    def keep_version(self, path: str) -> str | None:
+        """Copy a file to the trash before it's overwritten. Returns the copy's path."""
+        full = self.resolve(path)
+        if not full.is_file():
+            return None
+        stamp = time.strftime("%Y-%m-%d %H-%M-%S")
+        name = PurePosixPath(self.normalize(path))
+        dest = self._trash_path(f"{name.stem} ({stamp}){name.suffix}", is_dir=False)
+        self.write_bytes(dest, full.read_bytes())
+        return dest
+
+    def _trash_path(self, name: str, *, is_dir: bool) -> str:
+        """Pick a free name in the trash, numbering it when the name is taken."""
+        pure = PurePosixPath(name)
+        stem, suffix = (name, "") if is_dir else (pure.stem, pure.suffix)
+        candidate, n = name, 1
+        while self.resolve(f"{TRASH_FOLDER}/{candidate}").exists():
+            n += 1
+            candidate = f"{stem} {n}{suffix}"
+        return f"{TRASH_FOLDER}/{candidate}"
+
+    def empty_trash(self, max_age: float) -> int:
+        """Delete what has been in the trash longer than `max_age` seconds."""
+        trash = self.resolve(TRASH_FOLDER)
+        if not trash.is_dir():
+            return 0
+        cutoff = time.time() - max_age
+        removed = 0
+        for entry in trash.iterdir():
+            if entry.lstat().st_mtime >= cutoff:
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            removed += 1
+        return removed
 
     def delete(self, path: str) -> None:
         """Delete a file or a folder with everything in it."""

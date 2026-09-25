@@ -114,6 +114,22 @@ def _not_found(path: str) -> ServiceValidationError:
     )
 
 
+def _write_file(manager: NotesVault, path: str, content: str, append: bool) -> bool:
+    """Write a file for the write_file action. Runs in the executor.
+
+    Appending adds a line break if the file doesn't end with one. Overwriting keeps
+    the previous version in the trash, since an assistant can't take it back.
+    """
+    vault = manager.vault
+    if append and vault.exists(path):
+        existing = vault.read_text(path)
+        sep = "" if not existing or existing.endswith("\n") else "\n"
+        return vault.write_text(path, existing + sep + content)
+    if vault.exists(path) and vault.read_text(path) != content:
+        vault.keep_version(path)
+    return vault.write_text(path, content)
+
+
 @callback
 def async_setup_services(hass: HomeAssistant) -> None:
     """Register the actions."""
@@ -129,6 +145,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
             call.data[ATTR_NOTE],
             append=call.data[ATTR_APPEND],
             source="service",
+            # An assistant replacing a note can't take back what it overwrote, so
+            # the previous version goes to the trash.
+            keep_previous=True,
         )
         return result if call.return_response else None
 
@@ -149,16 +168,11 @@ def async_setup_services(hass: HomeAssistant) -> None:
         path = call.data[ATTR_PATH]
         content = call.data[ATTR_CONTENT]
 
-        def _write() -> bool:
-            if call.data[ATTR_APPEND] and manager.vault.exists(path):
-                existing = manager.vault.read_text(path)
-                sep = "" if not existing or existing.endswith("\n") else "\n"
-                return manager.vault.write_text(path, existing + sep + content)
-            return manager.vault.write_text(path, content)
-
         try:
             async with manager.lock:
-                created = await hass.async_add_executor_job(_write)
+                created = await hass.async_add_executor_job(
+                    _write_file, manager, path, content, call.data[ATTR_APPEND]
+                )
                 if created:
                     await hass.async_add_executor_job(manager.index_file, path)
         except (InvalidPathError, ConflictError) as err:

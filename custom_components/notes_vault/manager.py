@@ -14,6 +14,7 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -68,6 +69,7 @@ from .const import (
     KIND_FOLDERS,
     KIND_INTEGRATION,
     SYNC_DEBOUNCE,
+    TRASH_DAYS,
 )
 from .templates import (
     DEFAULT_TEMPLATES,
@@ -81,6 +83,7 @@ from .vault import (
     InvalidPathError,
     Note,
     NotFoundError,
+    StaleError,
     Vault,
     VaultError,
     link_target,
@@ -350,6 +353,10 @@ class NotesVault:
         #: Display names of integrations and entity domains ("air_quality" is
         #: "Air Quality"), used for readable tags. Filled before each sync.
         self._integration_names: dict[str, str] = {}
+        #: Display name of every generated note, by path, as of the last sync. The
+        #: panel asks for these on every click; rebuilding them means walking every
+        #: registry.
+        self._names: dict[str, str] = {}
         #: Integrations whose config entries describe helpers built from other
         #: entities (groups, min/max, utility meters), whose options are worth
         #: reading for the entities they use.
@@ -506,8 +513,12 @@ class NotesVault:
         return f"{self._base_url}{path}" if self._base_url else None
 
     @callback
-    def build_docs(self) -> dict[DocKey, Doc]:
-        """Describe every entity, device and area as it should appear in the vault."""
+    def build_docs(self, *, references: bool = True) -> dict[DocKey, Doc]:
+        """Describe every entity, device and area as it should appear in the vault.
+
+        Without `references`, entities aren't linked to what they're built from:
+        cheaper, and enough for anything that only reads names or picks templates.
+        """
         opts = self.options
         try:
             self._base_url = get_url(self.hass, prefer_external=True)
@@ -682,7 +693,8 @@ class NotesVault:
                         doc.managed["domain"], doc.managed["entity_id"], known
                     )
                 )
-        self._add_references(docs, known)
+        if references:
+            self._add_references(docs, known)
         self._add_integrations(docs)
         return docs
 
@@ -1035,6 +1047,7 @@ class NotesVault:
 
         paths = self._plan_paths(keep)
         self._resolve_links(keep, paths)
+        self._names = {paths[key]: doc.name for key, doc in keep.items()}
 
         renames: dict[str, str] = {}
         for key, doc in keep.items():
@@ -1052,6 +1065,7 @@ class NotesVault:
                     _LOGGER.warning("Could not rename %s to %s", old, path)
                     path = old
                     paths[key] = old
+                    self._names[old] = doc.name
             self.index[key] = path
 
             try:
@@ -1096,6 +1110,9 @@ class NotesVault:
             docs = self.build_docs()
             plans = self._plan_templates(docs, templates)
             stats = await self.hass.async_add_executor_job(self._apply, docs, plans)
+            await self.hass.async_add_executor_job(
+                self.vault.empty_trash, TRASH_DAYS * 86400
+            )
         self._store.async_delay_save(lambda: self._prefill, 5)
         await self.async_write_index()
         self.last_sync = stats
@@ -1161,7 +1178,7 @@ class NotesVault:
                 self._read_existing, path
             )
         if note is None:
-            docs = self.build_docs()
+            docs = self.build_docs(references=False)
             doc = docs.get(key)
             path = path or (
                 f"{doc.folder}/{doc.stem}{MARKDOWN_SUFFIX}" if doc else None
@@ -1318,14 +1335,26 @@ class NotesVault:
         }
 
     async def async_set_file(
-        self, path: str, body: str, *, source: str = "ui"
+        self,
+        path: str,
+        body: str,
+        *,
+        source: str = "ui",
+        check_mtime: bool = False,
+        mtime: float | None = None,
     ) -> dict[str, Any]:
-        """Replace the body of any note, keeping its frontmatter. Creates it if missing."""
+        """Replace the body of any note, keeping its frontmatter. Creates it if missing.
+
+        With `check_mtime`, the write is refused if the file changed since `mtime`,
+        the version the writer started from (None for a note it believed was new).
+        """
         path = self.vault.normalize(path)
         if not path.endswith(MARKDOWN_SUFFIX):
             path += MARKDOWN_SUFFIX
 
         def _write() -> None:
+            if check_mtime:
+                self.vault.check_unchanged(path, mtime)
             note = (
                 self.vault.read_note(path) if self.vault.exists(path) else Note({}, "")
             )
@@ -1418,26 +1447,40 @@ class NotesVault:
         return dst
 
     async def async_delete(self, path: str) -> None:
-        """Delete a note, or a folder with everything in it."""
+        """Move a note, or a folder with everything in it, to the vault's trash."""
         path = self.vault.normalize(path)
         self._check_unlocked(path)
         async with self.lock:
-            await self.hass.async_add_executor_job(self.vault.delete, path)
+            await self.hass.async_add_executor_job(self.vault.trash, path)
         self.file_removed(path)
 
     @callback
     def _display_names(self) -> dict[str, str]:
         """Map the path of each generated note to the name of what it is about."""
-        return {
-            self.index[key]: doc.name
-            for key, doc in self.build_docs().items()
-            if key in self.index
-        }
+        if not self._names:
+            self._names = {
+                self.index[key]: doc.name
+                for key, doc in self.build_docs(references=False).items()
+                if key in self.index
+            }
+        return self._names
 
     async def async_set_note(
-        self, key: DocKey, content: str, *, append: bool = False, source: str = "ui"
+        self,
+        key: DocKey,
+        content: str,
+        *,
+        append: bool = False,
+        source: str = "ui",
+        check_mtime: bool = False,
+        mtime: float | None = None,
+        keep_previous: bool = False,
     ) -> dict[str, Any]:
-        """Replace (or append to) the note attached to an object."""
+        """Replace (or append to) the note attached to an object.
+
+        `check_mtime` and `mtime` refuse a write based on an outdated version, as in
+        `async_set_file`. `keep_previous` copies what's being replaced to the trash.
+        """
         async with self.lock:
             docs = self.build_docs()
             if key not in docs:
@@ -1445,18 +1488,47 @@ class NotesVault:
                     translation_domain=DOMAIN, translation_key="no_target"
                 )
             path = await self.hass.async_add_executor_job(
-                self._write_body, docs, key, content, append
+                partial(
+                    self._write_body,
+                    docs,
+                    key,
+                    content,
+                    append,
+                    check_mtime=check_mtime,
+                    mtime=mtime,
+                    keep_previous=keep_previous,
+                )
             )
         self.fire_updated(path, source, key)
         return await self.async_get_note(key)
 
     def _write_body(
-        self, docs: dict[DocKey, Doc], key: DocKey, content: str, append: bool
+        self,
+        docs: dict[DocKey, Doc],
+        key: DocKey,
+        content: str,
+        append: bool,
+        *,
+        check_mtime: bool = False,
+        mtime: float | None = None,
+        keep_previous: bool = False,
     ) -> str:
         path = self.index.get(key)
         note = None
+        current_mtime = None
         if path:
-            note, _ = self._read_existing(path)
+            note, current_mtime = self._read_existing(path)
+        if check_mtime and current_mtime != mtime:
+            raise StaleError(path or key[1])
+        if (
+            path
+            and note is not None
+            and keep_previous
+            and not append
+            and note.body.strip() != content.strip()
+            and not self._is_untouched(key, note.body)
+        ):
+            self.vault.keep_version(path)
         if note is None:
             # Create the file even if the filters exclude it: a note always wins.
             docs[key].wanted = True
@@ -1466,6 +1538,7 @@ class NotesVault:
             path = paths[key]
             note = Note(merge_frontmatter({}, docs[key], None), "")
             self.index[key] = path
+            self._names[path] = docs[key].name
         body = content.strip("\n")
         if append and note.body.strip():
             body = note.body.rstrip("\n") + "\n\n" + body
@@ -1704,7 +1777,7 @@ class NotesVault:
     ) -> dict[str, Any] | None:
         """Render the named template, or the best match, for an object."""
         templates = await self.hass.async_add_executor_job(self._load_templates)
-        docs = self.build_docs()
+        docs = self.build_docs(references=False)
         if key not in docs:
             return None
         facts, values = self._template_context(docs, key)
@@ -1756,6 +1829,7 @@ class NotesVault:
             if indexed == path or indexed.startswith(prefix):
                 self.index.pop(key)
                 self._written.pop(key, None)
+                self._names.pop(indexed, None)
         # A generated note deleted in Obsidian comes back empty on the next sync,
         # which rewrites the index too.
         self._schedule()
@@ -1771,6 +1845,8 @@ class NotesVault:
                 self.index[key] = dst.rstrip("/") + "/" + indexed[len(prefix) :]
             else:
                 continue
+            if (name := self._names.pop(indexed, None)) is not None:
+                self._names[self.index[key]] = name
             self._written.pop(key, None)
         self.fire_updated(dst, "webdav")
 

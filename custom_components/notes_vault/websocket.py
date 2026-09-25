@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError, Unauthorized
 
 from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL
 from .manager import DocKey, LockedFolderError, NotesVault, loaded_manager
-from .vault import ConflictError, VaultError
+from .vault import ConflictError, StaleError, VaultError
 
 _TARGET = {
     vol.Exclusive("entity_id", "target"): str,
@@ -50,6 +50,13 @@ def _with_manager(func: _Handler) -> websocket_api.AsyncWebSocketCommandHandler:
                 "locked",
                 "This folder holds the generated notes. Change where they go in "
                 "the integration's options instead.",
+            )
+        except StaleError:
+            connection.send_error(
+                msg["id"],
+                "changed",
+                "This note changed while you were editing it. Copy your text, "
+                "cancel to see the new version, then add your changes back.",
             )
         except ConflictError:
             connection.send_error(
@@ -129,6 +136,9 @@ async def ws_get(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     {
         vol.Required("type"): "notes_vault/set",
         vol.Required("note"): str,
+        # The modification time of the version being edited, null for a new note.
+        # Without it the save overwrites whatever is there.
+        vol.Optional("mtime"): vol.Any(None, vol.Coerce(float)),
         **_TARGET_OR_PATH,
     }
 )
@@ -137,9 +147,18 @@ async def ws_get(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
 @_with_manager
 async def ws_set(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Replace the note of an entity, device or area, or of any note by path."""
+    check = "mtime" in msg
     if "path" in msg:
-        return await manager.async_set_file(msg["path"], msg["note"])
-    return await manager.async_set_note(_target(manager, msg), msg["note"], source="ui")
+        return await manager.async_set_file(
+            msg["path"], msg["note"], check_mtime=check, mtime=msg.get("mtime")
+        )
+    return await manager.async_set_note(
+        _target(manager, msg),
+        msg["note"],
+        source="ui",
+        check_mtime=check,
+        mtime=msg.get("mtime"),
+    )
 
 
 @websocket_api.websocket_command(

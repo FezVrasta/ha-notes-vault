@@ -74,7 +74,7 @@
     },
     "set_note": {
       "name": "Set note",
-      "description": "Replaces, or appends to, the note of an entity, device or area. The generated frontmatter is kept.",
+      "description": "Replaces, or appends to, the note of an entity, device or area. The generated frontmatter is kept, and a replaced note is kept in the vault's trash for 30 days.",
       "fields": {
         "entity_id": {
           "name": "Entity",
@@ -110,7 +110,7 @@
     },
     "write_file": {
       "name": "Write file",
-      "description": "Creates or overwrites a file in the vault. Missing folders are created.",
+      "description": "Creates or overwrites a file in the vault. Missing folders are created, and an overwritten file is kept in the vault's trash for 30 days.",
       "fields": {
         "path": {
           "name": "Path",
@@ -128,7 +128,7 @@
     },
     "delete_file": {
       "name": "Delete file",
-      "description": "Deletes a file or folder from the vault. A generated note comes back, empty, at the next sync.",
+      "description": "Moves a file or folder to the vault's trash, where it stays for 30 days. A generated note comes back, empty, at the next sync.",
       "fields": {
         "path": {
           "name": "Path",
