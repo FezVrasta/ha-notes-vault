@@ -49,15 +49,24 @@ from .const import (
 )
 from .vault import InvalidPathError, Vault
 
+#: Top-level folders of the config directory that Home Assistant owns. `www` is
+#: served without authentication at /local/, so a vault there would be public.
+RESERVED_FOLDERS = frozenset(
+    {"www", "custom_components", "deps", "blueprints", "tts", "themes", "backups"}
+)
 
-def _valid_folder(value: str) -> str | None:
+
+def _folder_error(value: str) -> str | None:
+    """Return why a vault folder can't be used, or None if it can."""
     try:
         folder = Vault.normalize(value)
     except InvalidPathError:
-        return None
+        return "invalid_folder"
     if not folder or folder.startswith("."):
-        return None
-    return folder
+        return "invalid_folder"
+    if folder.split("/", 1)[0].lower() in RESERVED_FOLDERS:
+        return "reserved_folder"
+    return None
 
 
 class NotesVaultConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -71,13 +80,12 @@ class NotesVaultConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick the folder for the vault."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            folder = _valid_folder(user_input[CONF_FOLDER])
-            if folder is None:
-                errors[CONF_FOLDER] = "invalid_folder"
+            if error := _folder_error(user_input[CONF_FOLDER]):
+                errors[CONF_FOLDER] = error
             else:
                 return self.async_create_entry(
                     title="Notes Vault",
-                    data={CONF_FOLDER: folder},
+                    data={CONF_FOLDER: Vault.normalize(user_input[CONF_FOLDER])},
                     options=dict(DEFAULT_OPTIONS),
                 )
 

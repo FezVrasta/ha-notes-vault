@@ -29,6 +29,12 @@ async def test_user_flow(hass: HomeAssistant) -> None:
     )
     assert result["errors"] == {CONF_FOLDER: "invalid_folder"}
 
+    # www/ is served without authentication: notes there would be public.
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_FOLDER: "www/notes"}
+    )
+    assert result["errors"] == {CONF_FOLDER: "reserved_folder"}
+
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_FOLDER: "notes/vault/"}
     )

@@ -248,7 +248,9 @@ class Vault:
         """Read a text file."""
         return self.read_bytes(path).decode("utf-8", errors="replace")
 
-    def write_bytes(self, path: str, data: bytes, *, make_parents: bool = True) -> bool:
+    def write_bytes(
+        self, path: str, data: bytes | bytearray, *, make_parents: bool = True
+    ) -> bool:
         """Write a file atomically. Return True if the file did not exist before."""
         full = self.resolve(path)
         if full == self.root.resolve() or full.is_dir():

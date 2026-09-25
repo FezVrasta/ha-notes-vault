@@ -13,7 +13,8 @@
       }
     },
     "error": {
-      "invalid_folder": "Use a relative folder name without `..`, and not a hidden folder."
+      "invalid_folder": "Use a relative folder name without `..`, and not a hidden folder.",
+      "reserved_folder": "Home Assistant uses this folder for something else. Notes under www/ would be public, for example. Pick another one."
     },
     "abort": {
       "single_instance_allowed": "Notes Vault is already set up. There's only one vault."
@@ -226,6 +227,9 @@
     },
     "no_template": {
       "message": "No template {name} fits this."
+    },
+    "locked_folder": {
+      "message": "{path} holds the generated notes and can't be deleted. Change where they go in the integration's options instead."
     }
   }
 }

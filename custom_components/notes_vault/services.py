@@ -11,7 +11,6 @@ from dataclasses import asdict
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -24,7 +23,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN
-from .manager import NotesVault
+from .manager import LockedFolderError, NotesVault, loaded_manager
 from .vault import MARKDOWN_SUFFIX, ConflictError, InvalidPathError, NotFoundError
 
 ATTR_ENTITY_ID = "entity_id"
@@ -84,10 +83,8 @@ SEARCH_SCHEMA = vol.Schema(
 
 
 def _manager(hass: HomeAssistant) -> NotesVault:
-    entries = hass.config_entries.async_entries(DOMAIN)
-    for entry in entries:
-        if entry.state is ConfigEntryState.LOADED:
-            return entry.runtime_data
+    if manager := loaded_manager(hass):
+        return manager
     raise ServiceValidationError(
         translation_domain=DOMAIN, translation_key="not_loaded"
     )
@@ -174,13 +171,19 @@ def async_setup_services(hass: HomeAssistant) -> None:
         manager = _manager(hass)
         path = call.data[ATTR_PATH]
         try:
-            async with manager.lock:
-                await hass.async_add_executor_job(manager.vault.delete, path)
+            # The same path as the panel's delete, so the generated folders stay
+            # protected from an assistant too.
+            await manager.async_delete(path)
+        except LockedFolderError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="locked_folder",
+                translation_placeholders={"path": path},
+            ) from err
         except InvalidPathError as err:
             raise _bad_path(path) from err
         except NotFoundError as err:
             raise _not_found(path) from err
-        manager.file_removed(manager.vault.normalize(path))
 
     async def list_files(call: ServiceCall) -> ServiceResponse:
         manager = _manager(hass)

@@ -8,9 +8,9 @@ from homeassistant.components import frontend, panel_custom
 from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import CoreState, Event, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -73,17 +73,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotesVaultConfigEntry) -
     entry.async_on_unload(lambda: frontend.async_remove_panel(hass, PANEL_URL))
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
-    async def _start(_event: Event | None = None) -> None:
-        await manager.async_start()
-
     # Registries are complete only once every integration has set up. Starting
     # earlier would delete the notes of entities that simply have not loaded yet.
-    if hass.state is CoreState.running:
-        await _start()
-    else:
-        entry.async_on_unload(
-            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start)
-        )
+    async def _start(_hass: HomeAssistant) -> None:
+        await manager.async_start()
+
+    entry.async_on_unload(async_at_started(hass, _start))
     return True
 
 

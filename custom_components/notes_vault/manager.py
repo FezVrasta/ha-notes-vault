@@ -644,9 +644,7 @@ class NotesVault:
             elif doc.kind == KIND_AREA:
                 doc.managed["devices"] = sorted(devices_by_area.get(doc.ha_id, []))
 
-    def _read_existing(
-        self, key: DocKey, path: str
-    ) -> tuple[Note | None, float | None]:
+    def _read_existing(self, path: str) -> tuple[Note | None, float | None]:
         try:
             info = self.vault.stat(path)
         except NotFoundError:
@@ -729,7 +727,7 @@ class NotesVault:
             path = self.index.get(key)
             if path is None:
                 continue
-            note, _ = self._read_existing(key, path)
+            note, _ = self._read_existing(path)
             if note is None:
                 continue
             if (
@@ -867,7 +865,7 @@ class NotesVault:
         mtime: float | None = None
         if path:
             note, mtime = await self.hass.async_add_executor_job(
-                self._read_existing, key, path
+                self._read_existing, path
             )
         if note is None:
             docs = self.build_docs()
@@ -907,9 +905,15 @@ class NotesVault:
         return sorted(self.vault.iter_markdown())
 
     @callback
+    def key_for_path(self, path: str) -> DocKey | None:
+        """Return the entity, device or area a generated note at `path` is about."""
+        path = self.vault.normalize(path)
+        return next((k for k, p in self.index.items() if p == path), None)
+
+    @callback
     def ha_target(self, path: str) -> dict[str, str] | None:
         """Return the entity, device or area a generated note belongs to."""
-        key = next((k for k, p in self.index.items() if p == path), None)
+        key = self.key_for_path(path)
         if key is None:
             return None
         kind, ha_id = key
@@ -986,13 +990,13 @@ class NotesVault:
         path = self.vault.normalize(path)
         try:
             note, mtime = await self.hass.async_add_executor_job(
-                self._read_existing, ("file", path), path
+                self._read_existing, path
             )
         except VaultError:
             note, mtime = None, None
         # A generated note still holding its untouched template is an empty note.
         template = None
-        key = next((k for k, p in self.index.items() if p == path), None)
+        key = self.key_for_path(path)
         if note is not None and key is not None and self._is_untouched(key, note.body):
             if note.body.strip():
                 record = self._prefill.get(_prefill_key(key), {})
@@ -1158,7 +1162,7 @@ class NotesVault:
         path = self.index.get(key)
         note = None
         if path:
-            note, _ = self._read_existing(key, path)
+            note, _ = self._read_existing(path)
         if note is None:
             # Create the file even if the filters exclude it: a note always wins.
             docs[key].wanted = True
@@ -1325,7 +1329,7 @@ class NotesVault:
     def fire_updated(self, path: str, source: str, key: DocKey | None = None) -> None:
         """Tell listeners that a note changed."""
         if key is None:
-            key = next((k for k, p in self.index.items() if p == path), None)
+            key = self.key_for_path(path)
         data: dict[str, Any] = {"path": path, "source": source}
         if key:
             kind, ha_id = key
@@ -1384,3 +1388,11 @@ class NotesVault:
         kind, ha_id = fm.get("ha_type"), fm.get("ha_id")
         if kind in (KIND_ENTITY, KIND_DEVICE, KIND_AREA) and isinstance(ha_id, str):
             self.index.setdefault((kind, ha_id), path)
+
+
+@callback
+def loaded_manager(hass: HomeAssistant) -> NotesVault | None:
+    """Return the manager of the loaded config entry, if there is one."""
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        return entry.runtime_data
+    return None

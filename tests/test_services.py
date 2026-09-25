@@ -117,3 +117,14 @@ async def test_file_paths_are_checked(hass: HomeAssistant, manager: NotesVault) 
         await _call(hass, "write_file", path="../x.md", content="x")
     with pytest.raises(ServiceValidationError):
         await _call(hass, "read_file", path="missing.md")
+
+
+async def test_delete_file_keeps_generated_folders(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """An action can't wipe the folders holding the generated notes."""
+    with pytest.raises(ServiceValidationError, match="generated notes"):
+        await hass.services.async_call(
+            DOMAIN, "delete_file", {"path": "Home Assistant"}, blocking=True
+        )
+    assert (vault_dir / "Home Assistant/Entities/light.kitchen_ceiling.md").exists()

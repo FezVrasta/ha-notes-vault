@@ -1,23 +1,19 @@
-"""Websocket commands used by the note editor in the Home Assistant UI."""
+"""Websocket commands used by the note editor and the Notes panel."""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import wraps
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 
-from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL, DOMAIN
-from .manager import LockedFolderError, NotesVault
+from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL
+from .manager import DocKey, LockedFolderError, NotesVault, loaded_manager
 from .vault import ConflictError, VaultError
-
-_LOCKED = (
-    "This folder holds the generated notes. Change where they go in the "
-    "integration's options instead."
-)
 
 _TARGET = {
     vol.Exclusive("entity_id", "target"): str,
@@ -27,26 +23,73 @@ _TARGET = {
 #: Notes by path are anything in the vault, so only administrators get to them.
 _TARGET_OR_PATH = {**_TARGET, vol.Exclusive("path", "target"): str}
 
+type _Handler = Callable[
+    [HomeAssistant, websocket_api.ActiveConnection, dict[str, Any], NotesVault],
+    Awaitable[Any],
+]
 
-def _manager(hass: HomeAssistant) -> NotesVault | None:
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.state is ConfigEntryState.LOADED:
-            return entry.runtime_data
-    return None
+
+def _with_manager(func: _Handler) -> websocket_api.AsyncWebSocketCommandHandler:
+    """Hand the handler the loaded vault, send its result, and map vault errors."""
+
+    @wraps(func)
+    async def wrapper(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        manager = loaded_manager(hass)
+        if manager is None:
+            connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
+            return
+        try:
+            result = await func(hass, connection, msg, manager)
+        except LockedFolderError:
+            connection.send_error(
+                msg["id"],
+                "locked",
+                "This folder holds the generated notes. Change where they go in "
+                "the integration's options instead.",
+            )
+        except ConflictError:
+            connection.send_error(
+                msg["id"], "exists", "A folder or note with that name already exists"
+            )
+        except VaultError as err:
+            connection.send_error(msg["id"], "invalid_path", str(err))
+        except Unauthorized:
+            raise
+        except HomeAssistantError as err:
+            connection.send_error(msg["id"], "not_found", str(err))
+        else:
+            connection.send_result(msg["id"], result)
+
+    return wrapper
+
+
+def _target(manager: NotesVault, msg: dict[str, Any]) -> DocKey:
+    return manager.resolve_target(
+        entity_id=msg.get("entity_id"),
+        device_id=msg.get("device_id"),
+        area_id=msg.get("area_id"),
+    )
 
 
 @callback
 def async_setup_websocket(hass: HomeAssistant) -> None:
     """Register the commands."""
-    websocket_api.async_register_command(hass, ws_info)
-    websocket_api.async_register_command(hass, ws_get)
-    websocket_api.async_register_command(hass, ws_set)
-    websocket_api.async_register_command(hass, ws_template)
-    websocket_api.async_register_command(hass, ws_tree)
-    websocket_api.async_register_command(hass, ws_search)
-    websocket_api.async_register_command(hass, ws_delete)
-    websocket_api.async_register_command(hass, ws_mkdir)
-    websocket_api.async_register_command(hass, ws_move)
+    for command in (
+        ws_info,
+        ws_get,
+        ws_set,
+        ws_template,
+        ws_tree,
+        ws_search,
+        ws_delete,
+        ws_mkdir,
+        ws_move,
+    ):
+        websocket_api.async_register_command(hass, command)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "notes_vault/info"})
@@ -55,7 +98,7 @@ def ws_info(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
     """Tell the frontend whether the vault is up and where WebDAV lives."""
-    manager = _manager(hass)
+    manager = loaded_manager(hass)
     connection.send_result(
         msg["id"],
         {
@@ -72,33 +115,14 @@ def ws_info(
     {vol.Required("type"): "notes_vault/get", **_TARGET_OR_PATH}
 )
 @websocket_api.async_response
-async def ws_get(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_get(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Return the note of an entity, device or area, or any note by path."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
     if "path" in msg:
         if not connection.user.is_admin:
             raise Unauthorized
-        try:
-            connection.send_result(msg["id"], await manager.async_get_file(msg["path"]))
-        except VaultError as err:
-            connection.send_error(msg["id"], "invalid_path", str(err))
-        return
-    try:
-        key = manager.resolve_target(
-            entity_id=msg.get("entity_id"),
-            device_id=msg.get("device_id"),
-            area_id=msg.get("area_id"),
-        )
-        result = await manager.async_get_note(key)
-    except HomeAssistantError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
-    connection.send_result(msg["id"], result)
+        return await manager.async_get_file(msg["path"])
+    return await manager.async_get_note(_target(manager, msg))
 
 
 @websocket_api.websocket_command(
@@ -110,33 +134,12 @@ async def ws_get(
 )
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_set(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_set(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Replace the note of an entity, device or area, or of any note by path."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
     if "path" in msg:
-        try:
-            result = await manager.async_set_file(msg["path"], msg["note"])
-        except VaultError as err:
-            connection.send_error(msg["id"], "invalid_path", str(err))
-            return
-        connection.send_result(msg["id"], result)
-        return
-    try:
-        key = manager.resolve_target(
-            entity_id=msg.get("entity_id"),
-            device_id=msg.get("device_id"),
-            area_id=msg.get("area_id"),
-        )
-        result = await manager.async_set_note(key, msg["note"], source="ui")
-    except HomeAssistantError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
-    connection.send_result(msg["id"], result)
+        return await manager.async_set_file(msg["path"], msg["note"])
+    return await manager.async_set_note(_target(manager, msg), msg["note"], source="ui")
 
 
 @websocket_api.websocket_command(
@@ -147,51 +150,29 @@ async def ws_set(
     }
 )
 @websocket_api.async_response
-async def ws_template(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_template(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Render a template for an object and list the ones that could apply to it."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
     if "path" in msg:
         # Only generated notes have an object to fit a template to.
-        key = next((k for k, p in manager.index.items() if p == msg["path"]), None)
+        key = manager.key_for_path(msg["path"])
         if key is None:
-            connection.send_result(msg["id"], {"template": None, "templates": []})
-            return
+            return {"template": None, "templates": []}
     else:
-        try:
-            key = manager.resolve_target(
-                entity_id=msg.get("entity_id"),
-                device_id=msg.get("device_id"),
-                area_id=msg.get("area_id"),
-            )
-        except HomeAssistantError as err:
-            connection.send_error(msg["id"], "not_found", str(err))
-            return
-    connection.send_result(
-        msg["id"],
-        {
-            "template": await manager.async_template(key, msg.get("name")),
-            "templates": [t["name"] for t in await manager.async_templates(key[0])],
-        },
-    )
+        key = _target(manager, msg)
+    return {
+        "template": await manager.async_template(key, msg.get("name")),
+        "templates": [t["name"] for t in await manager.async_templates(key[0])],
+    }
 
 
 @websocket_api.websocket_command({vol.Required("type"): "notes_vault/tree"})
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_tree(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """List every note in the vault."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
-    connection.send_result(msg["id"], await manager.async_tree())
+@_with_manager
+async def ws_tree(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
+    """List every note and folder in the vault."""
+    return await manager.async_tree()
 
 
 @websocket_api.websocket_command(
@@ -203,18 +184,13 @@ async def ws_tree(
 )
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_search(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_search(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Search the vault."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
     results = await hass.async_add_executor_job(
         lambda: manager.vault.search(msg["query"], limit=msg["limit"])
     )
-    connection.send_result(msg["id"], {"results": results})
+    return {"results": results}
 
 
 @websocket_api.websocket_command(
@@ -222,23 +198,11 @@ async def ws_search(
 )
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_delete(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_delete(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Delete a note or a folder."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
-    try:
-        await manager.async_delete(msg["path"])
-    except LockedFolderError:
-        connection.send_error(msg["id"], "locked", _LOCKED)
-        return
-    except VaultError as err:
-        connection.send_error(msg["id"], "invalid_path", str(err))
-        return
-    connection.send_result(msg["id"], {"path": msg["path"]})
+    await manager.async_delete(msg["path"])
+    return {"path": msg["path"]}
 
 
 @websocket_api.websocket_command(
@@ -246,25 +210,10 @@ async def ws_delete(
 )
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_mkdir(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_mkdir(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Create a folder."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
-    try:
-        path = await manager.async_mkdir(msg["path"])
-    except ConflictError:
-        connection.send_error(
-            msg["id"], "exists", "A folder or note with that name already exists"
-        )
-        return
-    except VaultError as err:
-        connection.send_error(msg["id"], "invalid_path", str(err))
-        return
-    connection.send_result(msg["id"], {"path": path})
+    return {"path": await manager.async_mkdir(msg["path"])}
 
 
 @websocket_api.websocket_command(
@@ -276,25 +225,7 @@ async def ws_mkdir(
 )
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_move(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
+@_with_manager
+async def ws_move(hass, connection, msg, manager: NotesVault) -> dict[str, Any]:
     """Rename or move a note or folder, rewriting the links to it."""
-    manager = _manager(hass)
-    if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
-        return
-    try:
-        path = await manager.async_move(msg["path"], msg["to"])
-    except LockedFolderError:
-        connection.send_error(msg["id"], "locked", _LOCKED)
-        return
-    except ConflictError:
-        connection.send_error(
-            msg["id"], "exists", "A folder or note with that name already exists"
-        )
-        return
-    except VaultError as err:
-        connection.send_error(msg["id"], "invalid_path", str(err))
-        return
-    connection.send_result(msg["id"], {"path": path})
+    return {"path": await manager.async_move(msg["path"], msg["to"])}

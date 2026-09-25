@@ -14,7 +14,6 @@ import mimetypes
 import uuid
 from datetime import UTC, datetime
 from email.utils import format_datetime
-from typing import TYPE_CHECKING
 from urllib.parse import quote, unquote, urlsplit
 from xml.sax.saxutils import escape
 
@@ -25,11 +24,16 @@ from homeassistant.components.http.ban import process_wrong_login
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.http import HomeAssistantView
 
-from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL, DOMAIN
-from .vault import ConflictError, FileInfo, InvalidPathError, NotFoundError, VaultError
-
-if TYPE_CHECKING:
-    from .manager import NotesVault
+from .const import CONF_WEBDAV, DAV_COLLECTION, DAV_URL
+from .manager import NotesVault, loaded_manager
+from .vault import (
+    ConflictError,
+    FileInfo,
+    InvalidPathError,
+    NotFoundError,
+    Vault,
+    VaultError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +91,18 @@ def _response_xml(href: str, name: str, info: FileInfo | None, is_dir: bool) -> 
     )
 
 
+def _walk_all(vault: Vault, path: str) -> list[FileInfo]:
+    """List everything below a folder, for PROPFIND with Depth: infinity."""
+    out: list[FileInfo] = []
+    stack = [path]
+    while stack:
+        for entry in vault.list_dir(stack.pop()):
+            out.append(entry)
+            if entry.is_dir:
+                stack.append(entry.path)
+    return out
+
+
 def _multistatus(responses: list[str]) -> web.Response:
     body = (
         '<?xml version="1.0" encoding="utf-8"?>\n<d:multistatus xmlns:d="DAV:">'
@@ -100,11 +116,8 @@ def _multistatus(responses: list[str]) -> web.Response:
 
 def active_manager(hass: HomeAssistant) -> NotesVault | None:
     """Return the vault of the loaded entry, if WebDAV is enabled on it."""
-    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
-        manager: NotesVault = entry.runtime_data
-        if manager.options[CONF_WEBDAV]:
-            return manager
-    return None
+    manager = loaded_manager(hass)
+    return manager if manager and manager.options[CONF_WEBDAV] else None
 
 
 class NotesVaultDavView(HomeAssistantView):
@@ -125,7 +138,6 @@ class NotesVaultDavView(HomeAssistantView):
         answers 404 while the entry is unloaded or WebDAV is switched off.
         """
         self.hass = hass
-        self.manager: NotesVault = None  # type: ignore[assignment]
 
     def register(
         self, hass: HomeAssistant, app: web.Application, router: web.UrlDispatcher
@@ -214,13 +226,12 @@ class NotesVaultDavView(HomeAssistantView):
                 status=403, text="Notes Vault needs an administrator token"
             )
 
-        self.manager = manager
         handler = getattr(self, f"_do_{method.lower()}", None)
         if handler is None:
             return web.Response(status=405, headers={"Allow": ALLOW})
         try:
             path = self._vault_path(request.match_info.get("path", ""))
-            return await handler(request, path)
+            return await handler(request, manager, path)
         except NotFoundError:
             return web.Response(status=404)
         except InvalidPathError:
@@ -240,13 +251,15 @@ class NotesVaultDavView(HomeAssistantView):
             headers={"DAV": "1, 2", "Allow": ALLOW, "MS-Author-Via": "DAV"},
         )
 
-    async def _do_options(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_options(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         return self._options()
 
     async def _do_propfind(
-        self, request: web.Request, path: str | None
+        self, request: web.Request, manager: NotesVault, path: str | None
     ) -> web.Response:
-        vault = self.manager.vault
+        vault = manager.vault
         depth = request.headers.get("Depth", "infinity").lower()
         await request.read()  # The requested property list is ignored: we send allprop.
 
@@ -266,7 +279,7 @@ class NotesVaultDavView(HomeAssistantView):
             if depth == "1":
                 children = await self._run(vault.list_dir, path)
             else:
-                children = await self._run(self._walk_all, path)
+                children = await self._run(_walk_all, vault, path)
             responses.extend(
                 _response_xml(
                     _href(c.path, c.is_dir), c.path.rsplit("/", 1)[-1], c, c.is_dir
@@ -275,25 +288,14 @@ class NotesVaultDavView(HomeAssistantView):
             )
         return _multistatus(responses)
 
-    def _walk_all(self, path: str) -> list[FileInfo]:
-        vault = self.manager.vault
-        out: list[FileInfo] = []
-        stack = [path]
-        while stack:
-            for entry in vault.list_dir(stack.pop()):
-                out.append(entry)
-                if entry.is_dir:
-                    stack.append(entry.path)
-        return out
-
     async def _do_proppatch(
-        self, request: web.Request, path: str | None
+        self, request: web.Request, manager: NotesVault, path: str | None
     ) -> web.Response:
         # Clients (Finder, Windows) set cosmetic properties. Accept and forget them.
         await request.read()
         if path is None:
             return web.Response(status=403)
-        info = await self._run(self.manager.vault.stat, path)
+        info = await self._run(manager.vault.stat, path)
         return _multistatus(
             [
                 f"<d:response><d:href>{escape(_href(path, info.is_dir))}</d:href>"
@@ -303,19 +305,21 @@ class NotesVaultDavView(HomeAssistantView):
         )
 
     async def _do_get(
-        self, request: web.Request, path: str | None
+        self, request: web.Request, manager: NotesVault, path: str | None
     ) -> web.StreamResponse:
-        return await self._get(path, head=False)
+        return await self._get(manager, path, head=False)
 
     async def _do_head(
-        self, request: web.Request, path: str | None
+        self, request: web.Request, manager: NotesVault, path: str | None
     ) -> web.StreamResponse:
-        return await self._get(path, head=True)
+        return await self._get(manager, path, head=True)
 
-    async def _get(self, path: str | None, *, head: bool) -> web.Response:
+    async def _get(
+        self, manager: NotesVault, path: str | None, *, head: bool
+    ) -> web.Response:
         if path is None:
             return web.Response(status=200, text=f"{DAV_COLLECTION}/\n")
-        vault = self.manager.vault
+        vault = manager.vault
         info = await self._run(vault.stat, path)
         if info.is_dir:
             children = await self._run(vault.list_dir, path)
@@ -340,7 +344,9 @@ class NotesVaultDavView(HomeAssistantView):
         body = await self._run(vault.read_bytes, path)
         return web.Response(status=200, body=body, headers=headers)
 
-    async def _do_put(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_put(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         if not path:
             return web.Response(status=405)
         chunks = bytearray()
@@ -348,10 +354,9 @@ class NotesVaultDavView(HomeAssistantView):
             chunks.extend(chunk)
             if len(chunks) > MAX_UPLOAD:
                 return web.Response(status=413)
-        manager = self.manager
         async with manager.lock:
             created = await self._run(
-                manager.vault.write_bytes, path, bytes(chunks), make_parents=False
+                manager.vault.write_bytes, path, chunks, make_parents=False
             )
             if created:
                 await self._run(manager.index_file, path)
@@ -361,41 +366,53 @@ class NotesVaultDavView(HomeAssistantView):
             status=201 if created else 204, headers={hdrs.ETAG: _etag(info)}
         )
 
-    async def _do_mkcol(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_mkcol(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         if not path:
             return web.Response(status=405)
         if await request.read():
             return web.Response(status=415)
         try:
-            await self._run(self.manager.vault.mkdir, path)
+            await self._run(manager.vault.mkdir, path)
         except ConflictError:
-            if await self._run(self.manager.vault.exists, path):
+            if await self._run(manager.vault.exists, path):
                 return web.Response(status=405)
             raise
         return web.Response(status=201)
 
-    async def _do_delete(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_delete(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         if not path:
             return web.Response(status=403)
-        async with self.manager.lock:
-            await self._run(self.manager.vault.delete, path)
-        self.manager.file_removed(path)
+        async with manager.lock:
+            await self._run(manager.vault.delete, path)
+        manager.file_removed(path)
         return web.Response(status=204)
 
-    async def _do_move(self, request: web.Request, path: str | None) -> web.Response:
-        return await self._move(request, path, copy=False)
+    async def _do_move(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
+        return await self._move(request, manager, path, copy=False)
 
-    async def _do_copy(self, request: web.Request, path: str | None) -> web.Response:
-        return await self._move(request, path, copy=True)
+    async def _do_copy(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
+        return await self._move(request, manager, path, copy=True)
 
     async def _move(
-        self, request: web.Request, path: str | None, *, copy: bool
+        self,
+        request: web.Request,
+        manager: NotesVault,
+        path: str | None,
+        *,
+        copy: bool,
     ) -> web.Response:
         if not path:
             return web.Response(status=403)
         dest = self._destination(request)
         overwrite = request.headers.get("Overwrite", "T").upper() != "F"
-        manager = self.manager
         try:
             async with manager.lock:
                 created = await self._run(
@@ -413,7 +430,9 @@ class NotesVaultDavView(HomeAssistantView):
             manager.file_moved(path, dest)
         return web.Response(status=201 if created else 204)
 
-    async def _do_lock(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_lock(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         # Locks are advisory and never enforced: they exist so that clients which
         # refuse to write without one (Finder mounts read-only otherwise) work.
         await request.read()
@@ -436,5 +455,7 @@ class NotesVaultDavView(HomeAssistantView):
             headers={"Lock-Token": f"<{token}>"},
         )
 
-    async def _do_unlock(self, request: web.Request, path: str | None) -> web.Response:
+    async def _do_unlock(
+        self, request: web.Request, manager: NotesVault, path: str | None
+    ) -> web.Response:
         return web.Response(status=204)
