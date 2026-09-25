@@ -211,8 +211,9 @@ class NotesVaultNote extends HTMLElement {
         const result = await hass.callWS({ type: "notes_vault/get", ...target });
         if (target !== this._target) return;
         this._state = { ...result, canEdit: info.can_edit };
-        // A note that doesn't exist yet, opened in the panel, is one being created.
-        if (target.path && !result.exists && info.can_edit) {
+        // In the panel, a note that doesn't exist yet is one being created, and one
+        // still holding its untouched template is ready to be filled in.
+        if (target.path && info.can_edit && (!result.exists || result.template)) {
           this._edit();
           return;
         }
@@ -255,15 +256,18 @@ class NotesVaultNote extends HTMLElement {
   async _edit() {
     const starting = !this._state.note;
     this._state = { ...this._state, editing: true, draft: this._state.note || "", templates: undefined };
-    // A new note on an entity, device or area starts from the template that fits it.
-    if (starting && !this._target.path) {
+    // A new note on an entity, device or area starts from the template that fits it,
+    // or the one it was pre-filled with, with the others on offer.
+    if (starting) {
+      const current = this._state.template;
       try {
         const result = await this.hass.callWS({ type: "notes_vault/template", ...this._target });
         this._state.templates = result.templates;
-        this._state.templateName = result.template?.name ?? BLANK;
-        this._state.draft = result.template?.body ?? "";
+        const template = current || result.template;
+        this._state.templateName = template?.name ?? BLANK;
+        this._state.draft = template?.body ?? "";
       } catch (err) {
-        // No templates: start blank.
+        if (current) this._state.draft = current.body;
       }
     }
     this._render();

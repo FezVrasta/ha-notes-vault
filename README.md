@@ -156,7 +156,9 @@ Obsidian-side MCP servers such as [mcp-obsidian](https://github.com/MarkusPfunds
 
 ## Templates
 
-Starting a note in Home Assistant pre-fills it from a template, picked to fit what the note is about, and a **Template** dropdown switches to another one or to a blank note. Generated notes stay empty until you write something, so templates never add files of their own.
+Every generated note starts out holding its template, so opening `Kitchen.md` in Obsidian gives you the headings to fill in. A note whose body is still exactly its template counts as empty: Home Assistant shows **No notes yet**, filters can remove it, and it's deleted along with its entity. The moment you write in it, it's yours. Edit a template and every note still holding the old one is updated to match, and none of the others.
+
+In Home Assistant, **Add note** starts from the same template, and a **Template** dropdown switches to another one or to a blank note. The Notes panel opens an untouched note straight in the editor.
 
 Templates are Markdown files in `Home Assistant/Templates/`, so you edit them in Obsidian like any other note (and Obsidian's own Templates plugin can use the same folder). The defaults cover the common cases:
 
@@ -187,7 +189,6 @@ ha_template:
 - Type:
 
 ## Battery log
-- {{date}}: replaced
 ```
 
 | Criterion | Matches |
@@ -198,7 +199,7 @@ ha_template:
 | `entity_domains` | Devices that have an entity of this domain |
 | `entity_device_classes` | Devices that have an entity of this device class |
 
-Every criterion a template sets has to match, and the template setting the most criteria wins. One with none is the fallback for its kind. Placeholders: `{{name}}`, `{{entity_id}}`, `{{device}}`, `{{area}}`, `{{manufacturer}}`, `{{model}}`, `{{integration}}` and `{{date}}`. Anything else in double braces is left as is, for Obsidian to fill.
+Every criterion a template sets has to match, and the template setting the most criteria wins. One with none is the fallback for its kind. Placeholders: `{{name}}`, `{{entity_id}}`, `{{device}}`, `{{area}}`, `{{manufacturer}}`, `{{model}}`, `{{integration}}` and `{{date}}` (the day the note was first filled in, so it doesn't change on its own). Anything else in double braces is left as is, for Obsidian to fill.
 
 ## AI and MCP
 
@@ -248,7 +249,7 @@ Filters only stop *empty* notes from being generated. Anything you've written a 
 ## Limitations
 
 - **Two-way sync can conflict.** If you edit a note in Obsidian while Home Assistant regenerates its frontmatter (after a rename, say), remotely-save sees both sides changed and applies its conflict rule. Home Assistant only writes a note when its metadata really changes, so this is rare, but it can happen.
-- **Deleting a generated note doesn't stick.** It comes back, empty, at the next sync. Exclude the entity or device in the options instead.
+- **Deleting a generated note doesn't stick.** It comes back, with its template, at the next sync. Exclude the entity or device in the options instead.
 - **Notes carry metadata, not live state.** Frontmatter holds names, IDs and relationships, never the current state, so the files don't churn with every sensor update.
 - **A removed entity keeps its note if it had one.** The file stays and gets `ha_removed: true`, so you don't lose what you wrote. An empty one is deleted.
 - **WebDAV needs an administrator token.** Use HTTPS if you reach Home Assistant from outside your network; the token travels with every request.

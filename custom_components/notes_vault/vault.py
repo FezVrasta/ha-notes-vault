@@ -102,6 +102,26 @@ def render_note(frontmatter: dict[str, Any], body: str) -> str:
     return f"---\n{dumped}---\n{body}"
 
 
+_LINK_WITH_LABEL = re.compile(r"!?\[\[([^\]|]+)(?:\|([^\]]*))?\]\]")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def plain_text(line: str) -> str:
+    """Reduce one line of Markdown to what a reader sees, for snippets.
+
+    Wikilinks become their label (or the note's name), Markdown links their text, and
+    list markers, heading marks, quotes and emphasis go.
+    """
+    text = _LINK_WITH_LABEL.sub(
+        lambda m: m.group(2) or PurePosixPath(m.group(1).split("#")[0]).name, line
+    )
+    text = _MD_LINK.sub(r"\1", text)
+    text = re.sub(r"^\s*(?:[-*+]|\d+\.|>|#{1,6})\s+", "", text)
+    text = re.sub(r"^\s*\[[ xX]\]\s+", "", text)
+    text = re.sub(r"(\*\*|__|\*|_|`|~~)(.+?)\1", r"\2", text)
+    return text.strip()
+
+
 def link_target(path: str) -> str:
     """Return the vault path without the Markdown suffix, as a wikilink uses it."""
     return path.removesuffix(MARKDOWN_SUFFIX)

@@ -21,7 +21,7 @@ from custom_components.notes_vault.templates import (
     parse_template,
     render,
 )
-from custom_components.notes_vault.vault import Note, parse_note
+from custom_components.notes_vault.vault import Note, parse_note, render_note
 
 TEMPLATES = "Home Assistant/Templates"
 
@@ -194,3 +194,46 @@ async def test_templates_are_not_indexed_as_notes(
 ) -> None:
     """Templates never become generated notes or targets of a sync."""
     assert not any(path.startswith(TEMPLATES) for path in manager.index.values())
+
+
+async def test_untouched_template_counts_as_empty(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A generated note still holding its template reads as empty, with the template."""
+    result = await manager.async_get_note((KIND_ENTITY, home["light"].id))
+    assert result["note"] == ""
+    assert result["template"]["name"] == "Light"
+    assert result["template"]["body"].startswith("## Fixture")
+
+
+async def test_template_edits_reach_untouched_notes_only(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """Changing a template re-renders the notes nobody wrote in, and no others."""
+    area_note = vault_dir / "Home Assistant/Areas/Kitchen.md"
+    light_note = vault_dir / "Home Assistant/Entities/light.kitchen_ceiling.md"
+    written = parse_note(light_note.read_text())
+    light_note.write_text(
+        render_note(written.frontmatter, written.body.replace("- Bulb:", "- Bulb: E27"))
+    )
+
+    (vault_dir / TEMPLATES / "Area.md").write_text(
+        "---\nha_template:\n  applies_to: area\n---\n## Plants in {{name}}\n"
+    )
+    (vault_dir / TEMPLATES / "Light.md").write_text(
+        "---\nha_template:\n  applies_to: entity\n  domains: [light]\n---\n## New\n"
+    )
+    await manager.async_sync()
+
+    assert parse_note(area_note.read_text()).body == "## Plants in Kitchen\n"
+    assert "- Bulb: E27" in parse_note(light_note.read_text()).body
+
+
+async def test_untouched_note_is_deleted_with_its_entity(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A pre-filled note nobody wrote in goes away with its entity."""
+    er.async_get(hass).async_remove(home["light"].entity_id)
+    hass.states.async_remove(home["light"].entity_id)
+    await manager.async_sync()
+    assert not (vault_dir / "Home Assistant/Entities/light.kitchen_ceiling.md").exists()

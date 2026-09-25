@@ -136,7 +136,7 @@ async def ws_set(
     {
         vol.Required("type"): "notes_vault/template",
         vol.Optional("name"): vol.Any(str, None),
-        **_TARGET,
+        **_TARGET_OR_PATH,
     }
 )
 @websocket_api.async_response
@@ -148,15 +148,22 @@ async def ws_template(
     if manager is None:
         connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
         return
-    try:
-        key = manager.resolve_target(
-            entity_id=msg.get("entity_id"),
-            device_id=msg.get("device_id"),
-            area_id=msg.get("area_id"),
-        )
-    except HomeAssistantError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
+    if "path" in msg:
+        # Only generated notes have an object to fit a template to.
+        key = next((k for k, p in manager.index.items() if p == msg["path"]), None)
+        if key is None:
+            connection.send_result(msg["id"], {"template": None, "templates": []})
+            return
+    else:
+        try:
+            key = manager.resolve_target(
+                entity_id=msg.get("entity_id"),
+                device_id=msg.get("device_id"),
+                area_id=msg.get("area_id"),
+            )
+        except HomeAssistantError as err:
+            connection.send_error(msg["id"], "not_found", str(err))
+            return
     connection.send_result(
         msg["id"],
         {

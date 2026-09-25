@@ -33,7 +33,8 @@ async def test_generates_linked_notes(
 ) -> None:
     """Entities, devices and areas get notes that link to each other."""
     light = _read(vault_dir, f"{ENTITIES}/light.kitchen_ceiling.md")
-    assert light.body == ""
+    # Pre-filled with the Light template, ready to fill in from Obsidian.
+    assert light.body.startswith("## Fixture\n- Bulb:")
     fm = light.frontmatter
     assert fm["ha_type"] == "entity"
     assert fm["ha_id"] == home["light"].id

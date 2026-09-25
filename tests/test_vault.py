@@ -11,6 +11,7 @@ from custom_components.notes_vault.vault import (
     InvalidPathError,
     Vault,
     parse_note,
+    plain_text,
     render_note,
     safe_name,
     wikilink,
@@ -105,3 +106,17 @@ def test_rewrite_links(vault: Vault) -> None:
     assert vault.read_text("Note.md") == (
         "[[light.b]] [[light.b|A]] [[HA/Entities/light.b#x]] [[light.ab]]"
     )
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("- See [[Home Assistant/Areas/Bedroom|Bedroom]]", "See Bedroom"),
+        ("Swap [[light.kitchen]] soon", "Swap light.kitchen soon"),
+        ("## **Bold** and _it_ with [a link](https://x)", "Bold and it with a link"),
+        ("- [ ] check [[Notes/Boiler#Service]]", "check Boiler"),
+    ],
+)
+def test_plain_text(line: str, expected: str) -> None:
+    """Snippets read like the rendered note, not its source."""
+    assert plain_text(line) == expected

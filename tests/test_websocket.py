@@ -52,12 +52,12 @@ async def test_panel_round_trip(
         {
             "path": "Home Assistant/Devices/Ceiling lamp.md",
             "name": "Ceiling lamp",
-            "snippet": "- '[[Home Assistant/Entities/light.kitchen_ceiling|Ceiling lamp]]'",
+            "snippet": "entities: Ceiling lamp",
         },
         {
             "path": "Projects/Lighting.md",
             "name": None,
-            "snippet": "Swap [[light.kitchen_ceiling]] for a dimmable one.",
+            "snippet": "Swap light.kitchen_ceiling for a dimmable one.",
         },
     ]
 

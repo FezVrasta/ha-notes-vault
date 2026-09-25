@@ -9,6 +9,7 @@ Obsidian.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Callable, Mapping
@@ -37,6 +38,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.helpers.storage import Store
 from homeassistant.loader import Integration, async_get_integrations
 from homeassistant.util import dt as dt_util
 
@@ -76,6 +78,8 @@ from .vault import (
     Vault,
     VaultError,
     link_target,
+    parse_note,
+    plain_text,
     render_note,
     safe_name,
     wikilink,
@@ -114,6 +118,17 @@ MANAGED_KEYS: frozenset[str] = frozenset(
 ADDITIVE_KEYS = ("aliases", "tags")
 
 type DocKey = tuple[str, str]
+#: A template and the placeholder values to render it with, for one note.
+type Plan = tuple[Template, dict[str, Any]]
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
+
+
+def _prefill_key(key: DocKey) -> str:
+    return f"{key[0]}:{key[1]}"
+
 
 #: The target of a wikilink: `[[target]]`, `[[target|label]]`, `[[target#heading]]`.
 _WIKILINK = re.compile(r"\[\[([^\]|#^]+)")
@@ -141,10 +156,6 @@ class Doc:
     def key(self) -> DocKey:
         """Identify the doc across renames."""
         return (self.kind, self.ha_id)
-
-
-def _is_blank(note: Note) -> bool:
-    return not note.body.strip()
 
 
 def _user_keys(frontmatter: Mapping[str, Any]) -> set[str]:
@@ -250,7 +261,14 @@ class NotesVault:
         #: start, so a note moved in Obsidian is followed rather than duplicated.
         self.index: dict[DocKey, str] = {}
         #: Frontmatter last written or read per key, to skip unchanged files.
-        self._written: dict[DocKey, tuple[float, dict[str, Any]]] = {}
+        self._written: dict[DocKey, tuple[float, dict[str, Any], str]] = {}
+        #: The template body each generated note was pre-filled with, by key, so a note
+        #: still holding exactly that body counts as empty. Kept in .storage rather
+        #: than in the note, so nothing shows up in Obsidian's properties.
+        self._prefill: dict[str, dict[str, str]] = {}
+        self._store: Store[dict[str, dict[str, str]]] = Store(
+            hass, 1, f"{DOMAIN}.prefill"
+        )
         self.lock = asyncio.Lock()
         self._unsubs: list[Callable[[], None]] = []
         self._debouncer: Debouncer | None = None
@@ -264,6 +282,7 @@ class NotesVault:
 
     async def async_start(self) -> None:
         """Scan the vault, generate the notes and start following registry changes."""
+        self._prefill = await self._store.async_load() or {}
         await self.hass.async_add_executor_job(self.vault.ensure)
         await self.hass.async_add_executor_job(self._seed_templates)
         await self.hass.async_add_executor_job(self._scan)
@@ -629,34 +648,71 @@ class NotesVault:
             return None, None
         return self.vault.read_note(path), info.mtime
 
-    def _write_doc(self, key: DocKey, doc: Doc, path: str) -> str:
-        """Write one note's frontmatter if it changed. Return the stats bucket."""
+    def _render_plan(self, key: DocKey, plan: Plan | None) -> str | None:
+        """Render the template a note is pre-filled with."""
+        if plan is None:
+            return None
+        template, values = plan
+        record = self._prefill.get(_prefill_key(key))
+        # The date the note was first filled in, so it doesn't change every day.
+        date = record.get("date") if record else None
+        return render(template.body, {**values, "date": date or values.get("date")})
+
+    def _is_untouched(
+        self, key: DocKey, body: str, rendered: str | None = None
+    ) -> bool:
+        """Return whether a note body is empty or still exactly its template."""
+        if not body.strip():
+            return True
+        record = self._prefill.get(_prefill_key(key))
+        if record and record.get("hash") == _digest(body):
+            return True
+        return rendered is not None and body == rendered
+
+    def _write_doc(self, key: DocKey, doc: Doc, path: str, plan: Plan | None) -> str:
+        """Write one note if its frontmatter or pre-filled body changed.
+
+        Returns the stats bucket. An untouched body (empty, or exactly its template)
+        is re-rendered from the current template; anything the user wrote is kept.
+        """
         cached = self._written.get(key)
         try:
             mtime: float | None = self.vault.stat(path).mtime
         except NotFoundError:
             mtime = None
-        note: Note | None = None
         if cached and mtime is not None and cached[0] == mtime:
-            current_fm = cached[1]
-        else:
-            note = self.vault.read_note(path) if mtime is not None else None
-            current_fm = note.frontmatter if note else {}
-            if note and not note.valid:
+            current_fm, body = cached[1], cached[2]
+        elif mtime is not None:
+            note = self.vault.read_note(path)
+            if not note.valid:
                 _LOGGER.warning("Skipping %s: its frontmatter is not valid YAML", path)
                 return "unchanged"
+            current_fm, body = note.frontmatter, note.body
+        else:
+            current_fm, body = {}, ""
         merged = merge_frontmatter(current_fm, doc, current_fm.get("name"))
-        if mtime is not None and merged == current_fm:
+        rendered = self._render_plan(key, plan)
+        new_body = body
+        if rendered is not None and self._is_untouched(key, body, rendered):
+            new_body = rendered
+            record = self._prefill.get(_prefill_key(key)) or {}
+            self._prefill[_prefill_key(key)] = {
+                "hash": _digest(rendered),
+                "date": record.get("date") or plan[1].get("date"),
+                "template": plan[0].name,
+            }
+        if mtime is not None and merged == current_fm and new_body == body:
+            self._written[key] = (mtime, merged, body)
             return "unchanged"
-        if note is None and mtime is not None:
-            note = self.vault.read_note(path)
-        body = note.body if note else ""
-        created = self.vault.write_text(path, render_note(merged, body))
-        self._written[key] = (self.vault.stat(path).mtime, merged)
+        created = self.vault.write_text(path, render_note(merged, new_body))
+        self._written[key] = (self.vault.stat(path).mtime, merged, new_body)
         return "created" if created else "updated"
 
-    def _apply(self, docs: dict[DocKey, Doc]) -> dict[str, int]:
+    def _apply(
+        self, docs: dict[DocKey, Doc], plans: dict[DocKey, Plan] | None = None
+    ) -> dict[str, int]:
         """Bring the files on disk in line with the docs. Runs in the executor."""
+        plans = plans or {}
         stats = {"created": 0, "updated": 0, "renamed": 0, "deleted": 0, "unchanged": 0}
 
         # Which excluded objects still have a note worth keeping?
@@ -671,7 +727,13 @@ class NotesVault:
             note, _ = self._read_existing(key, path)
             if note is None:
                 continue
-            if not _is_blank(note) or _user_keys(note.frontmatter) or not note.valid:
+            if (
+                not self._is_untouched(
+                    key, note.body, self._render_plan(key, plans.get(key))
+                )
+                or _user_keys(note.frontmatter)
+                or not note.valid
+            ):
                 keep[key] = doc
             else:
                 self.vault.delete(path)
@@ -700,7 +762,7 @@ class NotesVault:
             self.index[key] = path
 
             try:
-                stats[self._write_doc(key, doc, path)] += 1
+                stats[self._write_doc(key, doc, path, plans.get(key))] += 1
             except (OSError, VaultError, yaml.YAMLError):
                 # One unwritable note must not stop the rest of the vault.
                 _LOGGER.exception("Could not update %s", path)
@@ -713,10 +775,15 @@ class NotesVault:
             except NotFoundError:
                 self.index.pop(key)
                 continue
-            if _is_blank(note) and not _user_keys(note.frontmatter) and note.valid:
+            if (
+                self._is_untouched(key, note.body)
+                and not _user_keys(note.frontmatter)
+                and note.valid
+            ):
                 self.vault.delete(path)
                 self.index.pop(key)
                 self._written.pop(key, None)
+                self._prefill.pop(_prefill_key(key), None)
                 stats["deleted"] += 1
             elif note.valid and not note.frontmatter.get("ha_removed"):
                 note.frontmatter["ha_removed"] = True
@@ -731,9 +798,12 @@ class NotesVault:
     async def async_sync(self) -> dict[str, int]:
         """Regenerate the notes now."""
         await self._async_load_integration_names()
+        templates = await self.hass.async_add_executor_job(self._load_templates)
         async with self.lock:
             docs = self.build_docs()
-            stats = await self.hass.async_add_executor_job(self._apply, docs)
+            plans = self._plan_templates(docs, templates)
+            stats = await self.hass.async_add_executor_job(self._apply, docs, plans)
+        self._store.async_delay_save(lambda: self._prefill, 5)
         self.last_sync = stats
         if any(stats[k] for k in ("created", "updated", "renamed", "deleted")):
             _LOGGER.debug("Vault sync: %s", stats)
@@ -801,9 +871,18 @@ class NotesVault:
                 f"{doc.folder}/{doc.stem}{MARKDOWN_SUFFIX}" if doc else None
             )
         # An empty note comes with the template that fits it, so the UI can offer it
-        # and an assistant knows what shape of note is expected.
+        # and an assistant knows what shape of note is expected. A note still holding
+        # exactly the template it was pre-filled with counts as empty.
         template = None
-        if note is None or not note.body.strip():
+        if (
+            note is not None
+            and note.body.strip()
+            and self._is_untouched(key, note.body)
+        ):
+            record = self._prefill.get(_prefill_key(key), {})
+            template = {"name": record.get("template"), "body": note.body.strip("\n")}
+            note = Note(note.frontmatter, "")
+        elif note is None or not note.body.strip():
             template = await self.async_template(key)
         return {
             "template": template,
@@ -858,7 +937,12 @@ class NotesVault:
         return links
 
     def _backlinks(self, path: str) -> list[dict[str, str]]:
-        """Find the notes linking to a path, with the line that links. Runs in the executor."""
+        """Find the notes linking to a path, and how. Runs in the executor.
+
+        The snippet is readable text, not source: a link from a property reads
+        `device: Back Garden`, a link in the body is its line with links reduced to
+        their labels.
+        """
         full = link_target(path)
         stem = PurePosixPath(full).name
         pattern = re.compile(
@@ -874,8 +958,22 @@ class NotesVault:
                 continue
             if not pattern.search(text):
                 continue
-            line = next((ln for ln in text.splitlines() if pattern.search(ln)), "")
-            found.append({"path": other, "snippet": line.strip()[:200]})
+            note = parse_note(text)
+            snippet = next(
+                (
+                    f"{key}: {plain_text(value)}"
+                    for key, raw in note.frontmatter.items()
+                    for value in _as_list(raw)
+                    if isinstance(value, str) and pattern.search(value)
+                ),
+                None,
+            )
+            if snippet is None:
+                line = next(
+                    (ln for ln in note.body.splitlines() if pattern.search(ln)), ""
+                )
+                snippet = plain_text(line)
+            found.append({"path": other, "snippet": snippet[:200]})
         return found
 
     async def async_get_file(self, path: str) -> dict[str, Any]:
@@ -887,6 +985,19 @@ class NotesVault:
             )
         except VaultError:
             note, mtime = None, None
+        # A generated note still holding its untouched template is an empty note.
+        template = None
+        key = next((k for k, p in self.index.items() if p == path), None)
+        if note is not None and key is not None and self._is_untouched(key, note.body):
+            if note.body.strip():
+                record = self._prefill.get(_prefill_key(key), {})
+                template = {
+                    "name": record.get("template"),
+                    "body": note.body.strip("\n"),
+                }
+                note = Note(note.frontmatter, "")
+            else:
+                template = await self.async_template(key)
         backlinks = await self.hass.async_add_executor_job(self._backlinks, path)
         names = self._display_names()
         for backlink in backlinks:
@@ -898,6 +1009,7 @@ class NotesVault:
             "frontmatter": note.frontmatter if note else {},
             "links": await self.async_resolve_links(note.body) if note else {},
             "backlinks": backlinks,
+            "template": template,
             "ha": self.ha_target(path),
             "mtime": mtime,
         }
@@ -1015,9 +1127,20 @@ class NotesVault:
                 templates.append(template)
         return sorted(templates, key=lambda t: t.name)
 
+    @staticmethod
+    def _entities_by_device(docs: dict[DocKey, Doc]) -> dict[str, list[Doc]]:
+        grouped: dict[str, list[Doc]] = {}
+        for doc in docs.values():
+            if doc.kind == KIND_ENTITY and (device_id := doc.managed.get("device")):
+                grouped.setdefault(device_id, []).append(doc)
+        return grouped
+
     @callback
     def _template_context(
-        self, docs: dict[DocKey, Doc], key: DocKey
+        self,
+        docs: dict[DocKey, Doc],
+        key: DocKey,
+        entities_by_device: dict[str, list[Doc]] | None = None,
     ) -> tuple[dict[str, list[str]], dict[str, Any]]:
         """Return what a template can match on, and the placeholder values."""
         doc = docs[key]
@@ -1040,11 +1163,9 @@ class NotesVault:
                 device_doc = docs.get((KIND_DEVICE, m["device"]))
         elif doc.kind == KIND_DEVICE:
             device_doc = doc
-            entities = [
-                d
-                for d in docs.values()
-                if d.kind == KIND_ENTITY and d.managed.get("device") == doc.ha_id
-            ]
+            if entities_by_device is None:
+                entities_by_device = self._entities_by_device(docs)
+            entities = entities_by_device.get(doc.ha_id, [])
             facts = {
                 "integrations": list(m.get("integration") or []),
                 "entity_domains": sorted({d.managed["domain"] for d in entities}),
@@ -1061,6 +1182,27 @@ class NotesVault:
         if area_id and (area_doc := docs.get((KIND_AREA, area_id))):
             values["area"] = area_doc.name
         return facts, values
+
+    @callback
+    def _plan_templates(
+        self, docs: dict[DocKey, Doc], templates: list[Template]
+    ) -> dict[DocKey, Plan]:
+        """Pick the template each note is pre-filled with.
+
+        Runs before the links are resolved, while the docs still hold raw IDs.
+        Entities are grouped by device once, so this stays linear in the registry.
+        """
+        if not templates:
+            return {}
+        plans: dict[DocKey, Plan] = {}
+        by_device = self._entities_by_device(docs)
+        for key, doc in docs.items():
+            if not doc.wanted and key not in self.index:
+                continue
+            facts, values = self._template_context(docs, key, by_device)
+            if template := best_template(templates, key[0], facts):
+                plans[key] = (template, values)
+        return plans
 
     async def async_templates(self, kind: str | None = None) -> list[dict[str, Any]]:
         """List the templates, optionally only those for one kind of object."""

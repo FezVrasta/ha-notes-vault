@@ -128,9 +128,11 @@ async def test_paths_cannot_escape(dav) -> None:
 async def test_editing_a_generated_note(
     hass: HomeAssistant, home: dict, manager: NotesVault, dav
 ) -> None:
-    """A note written from Obsidian is what the UI shows."""
+    """Filling in the pre-filled template from Obsidian is what the UI shows."""
     path = "/vault/Home%20Assistant/Entities/light.kitchen_ceiling.md"
     text = await (await dav("GET", path)).text()
-    await dav("PUT", path, data=(text + "Written in Obsidian.\n").encode())
+    assert "- Bulb:\n" in text
+    await dav("PUT", path, data=text.replace("- Bulb:", "- Bulb: E27").encode())
     note = await manager.async_get_note(("entity", home["light"].id))
-    assert note["note"] == "Written in Obsidian."
+    assert "- Bulb: E27" in note["note"]
+    assert note["template"] is None

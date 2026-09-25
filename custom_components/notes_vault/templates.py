@@ -129,7 +129,6 @@ ha_template:
 ## Manual and links
 
 ## Maintenance log
-- {{date}}:
 
 ## Quirks
 """,
@@ -153,7 +152,6 @@ ha_template:
 - Last replaced:
 
 ## Maintenance log
-- {{date}}:
 
 ## Manual and links
 
@@ -172,7 +170,6 @@ ha_template:
 - Count:
 
 ## Battery log
-- {{date}}: replaced
 
 ## Quirks
 """,
@@ -194,7 +191,6 @@ ha_template:
 - Credentials stored in:
 
 ## Firmware log
-- {{date}}:
 
 ## Quirks
 """,
@@ -221,7 +217,6 @@ ha_template:
 - Circuit breaker:
 
 ## Replacement log
-- {{date}}:
 
 ## Quirks
 """,
@@ -252,7 +247,6 @@ ha_template:
 ## How it works
 
 ## Decisions
-- {{date}}:
 
 ## Known issues
 """,
