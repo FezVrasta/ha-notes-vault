@@ -5,4 +5,7 @@
 # When you bump this, bump PYTHON_VERSION in .github/workflows/ci.yml and the
 # `homeassistant` floor in hacs.json to match.
 pytest-homeassistant-custom-component==0.13.357
+# Notes Vault depends on `frontend`, whose Python package the fixtures above leave out.
+# Keep it at the version the pinned Home Assistant's frontend manifest asks for.
+home-assistant-frontend==20260729.7
 ruff
