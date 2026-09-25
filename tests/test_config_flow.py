@@ -11,8 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.example_integration.api import ExampleAuthError, ExampleError
-from custom_components.example_integration.const import DOMAIN
+from custom_components.notes_vault.api import NotesVaultAuthError, NotesVaultError
+from custom_components.notes_vault.const import DOMAIN
 
 USER_INPUT = {CONF_HOST: "192.0.2.10", CONF_PORT: 80, CONF_TOKEN: "secret"}
 
@@ -37,8 +37,8 @@ async def test_user_flow(hass: HomeAssistant, mock_client: AsyncMock) -> None:
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (ExampleError("nope"), "cannot_connect"),
-        (ExampleAuthError("nope"), "invalid_auth"),
+        (NotesVaultError("nope"), "cannot_connect"),
+        (NotesVaultAuthError("nope"), "invalid_auth"),
     ],
 )
 async def test_user_flow_errors_recover(

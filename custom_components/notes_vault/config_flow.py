@@ -20,7 +20,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from homeassistant.core import callback
 
-from .api import ExampleAuthError, ExampleClient, ExampleError
+from .api import NotesVaultAuthError, NotesVaultClient, NotesVaultError
 from .const import DEFAULT_PORT, DOMAIN
 
 STEP_USER_SCHEMA = vol.Schema(
@@ -40,7 +40,7 @@ async def _validate(data: Mapping[str, Any]) -> str:
     unique ID. Using the host instead means a DHCP lease change creates a duplicate
     entry and orphans every entity.
     """
-    client = ExampleClient(
+    client = NotesVaultClient(
         host=data[CONF_HOST], port=data[CONF_PORT], token=data.get(CONF_TOKEN)
     )
     try:
@@ -50,7 +50,7 @@ async def _validate(data: Mapping[str, Any]) -> str:
     return result.serial
 
 
-class ExampleConfigFlow(ConfigFlow, domain=DOMAIN):
+class NotesVaultConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the config flow."""
 
     VERSION = 1
@@ -64,9 +64,9 @@ class ExampleConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 serial = await _validate(user_input)
-            except ExampleAuthError:
+            except NotesVaultAuthError:
                 errors["base"] = "invalid_auth"
-            except ExampleError:
+            except NotesVaultError:
                 errors["base"] = "cannot_connect"
             else:
                 await self.async_set_unique_id(serial)
@@ -100,9 +100,9 @@ class ExampleConfigFlow(ConfigFlow, domain=DOMAIN):
             data = {**entry.data, **user_input}
             try:
                 await _validate(data)
-            except ExampleAuthError:
+            except NotesVaultAuthError:
                 errors["base"] = "invalid_auth"
-            except ExampleError:
+            except NotesVaultError:
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(entry, data_updates=data)
@@ -123,9 +123,9 @@ class ExampleConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 serial = await _validate(user_input)
-            except ExampleAuthError:
+            except NotesVaultAuthError:
                 errors["base"] = "invalid_auth"
-            except ExampleError:
+            except NotesVaultError:
                 errors["base"] = "cannot_connect"
             else:
                 # Refusing a different serial is what stops someone reconfiguring an
@@ -146,12 +146,12 @@ class ExampleConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry) -> ExampleOptionsFlow:
+    def async_get_options_flow(config_entry) -> NotesVaultOptionsFlow:
         """Return the options flow."""
-        return ExampleOptionsFlow()
+        return NotesVaultOptionsFlow()
 
 
-class ExampleOptionsFlow(OptionsFlow):
+class NotesVaultOptionsFlow(OptionsFlow):
     """Settings that can change without re-validating the connection."""
 
     async def async_step_init(

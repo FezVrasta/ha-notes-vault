@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.example_integration.const import DOMAIN
+from custom_components.notes_vault.const import DOMAIN
 
 
 async def test_entities_are_created(

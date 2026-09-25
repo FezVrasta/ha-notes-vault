@@ -20,20 +20,20 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import ExampleConfigEntry
-from .api import ExampleData
-from .entity import ExampleEntity
+from . import NotesVaultConfigEntry
+from .api import NotesVaultData
+from .entity import NotesVaultEntity
 
 
 @dataclass(frozen=True, kw_only=True)
-class ExampleSensorDescription(SensorEntityDescription):
+class NotesVaultSensorDescription(SensorEntityDescription):
     """A sensor and how to read its value out of a poll."""
 
-    value_fn: Callable[[ExampleData], float | int | str | None]
+    value_fn: Callable[[NotesVaultData], float | int | str | None]
 
 
-SENSORS: tuple[ExampleSensorDescription, ...] = (
-    ExampleSensorDescription(
+SENSORS: tuple[NotesVaultSensorDescription, ...] = (
+    NotesVaultSensorDescription(
         key="temperature",
         translation_key="temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -46,22 +46,22 @@ SENSORS: tuple[ExampleSensorDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ExampleConfigEntry,
+    entry: NotesVaultConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the sensors."""
     coordinator = entry.runtime_data
     async_add_entities(
-        ExampleSensor(coordinator, description) for description in SENSORS
+        NotesVaultSensor(coordinator, description) for description in SENSORS
     )
 
 
-class ExampleSensor(ExampleEntity, SensorEntity):
+class NotesVaultSensor(NotesVaultEntity, SensorEntity):
     """A single reading."""
 
-    entity_description: ExampleSensorDescription
+    entity_description: NotesVaultSensorDescription
 
-    def __init__(self, coordinator, description: ExampleSensorDescription) -> None:
+    def __init__(self, coordinator, description: NotesVaultSensorDescription) -> None:
         """Bind the entity to its description."""
         super().__init__(coordinator, description.key)
         self.entity_description = description

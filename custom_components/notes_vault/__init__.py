@@ -1,4 +1,4 @@
-"""The Example Integration."""
+"""The Notes Vault."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import PLATFORMS
-from .coordinator import ExampleCoordinator
+from .coordinator import NotesVaultCoordinator
 
 #: Typing the entry by its runtime data is what lets every platform read
 #: `entry.runtime_data` without a cast. It replaces the old `hass.data[DOMAIN]` dict,
 #: which Home Assistant no longer wants custom integrations using.
-type ExampleConfigEntry = ConfigEntry[ExampleCoordinator]
+type NotesVaultConfigEntry = ConfigEntry[NotesVaultCoordinator]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ExampleConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: NotesVaultConfigEntry) -> bool:
     """Set up a device from a config entry."""
-    coordinator = ExampleCoordinator(hass, entry)
+    coordinator = NotesVaultCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
@@ -25,7 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ExampleConfigEntry) -> b
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ExampleConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: NotesVaultConfigEntry) -> bool:
     """Unload a config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
@@ -33,6 +33,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ExampleConfigEntry) -> 
     return unloaded
 
 
-async def _async_reload_entry(hass: HomeAssistant, entry: ExampleConfigEntry) -> None:
+async def _async_reload_entry(hass: HomeAssistant, entry: NotesVaultConfigEntry) -> None:
     """Reload when the options change."""
     await hass.config_entries.async_reload(entry.entry_id)

@@ -1,0 +1,17 @@
+{
+  "domain": "notes_vault",
+  "name": "Notes Vault",
+  "codeowners": [
+    "@FezVrasta"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/FezVrasta/ha-notes-vault",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/FezVrasta/ha-notes-vault/issues",
+  "loggers": [
+    "notes_vault"
+  ],
+  "requirements": [],
+  "version": "0.0.0"
+}

@@ -16,8 +16,8 @@ import pytest
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.example_integration.api import ExampleData
-from custom_components.example_integration.const import DOMAIN
+from custom_components.notes_vault.api import NotesVaultData
+from custom_components.notes_vault.const import DOMAIN
 
 
 @pytest.fixture(autouse=True)
@@ -26,13 +26,13 @@ def _enable_custom_integrations(enable_custom_integrations: None) -> None:
 
 
 @pytest.fixture
-def device_data() -> ExampleData:
+def device_data() -> NotesVaultData:
     """One poll's worth of readings."""
-    return ExampleData(serial="ABC123", firmware="1.2.3", temperature=21.5, online=True)
+    return NotesVaultData(serial="ABC123", firmware="1.2.3", temperature=21.5, online=True)
 
 
 @pytest.fixture
-def mock_client(device_data: ExampleData) -> Generator[AsyncMock]:
+def mock_client(device_data: NotesVaultData) -> Generator[AsyncMock]:
     """Patch the protocol client everywhere it is constructed.
 
     Patching the class rather than the network means the tests never depend on a real
@@ -41,11 +41,11 @@ def mock_client(device_data: ExampleData) -> Generator[AsyncMock]:
     """
     with (
         patch(
-            "custom_components.example_integration.coordinator.ExampleClient",
+            "custom_components.notes_vault.coordinator.NotesVaultClient",
             autospec=True,
         ) as coordinator_client,
         patch(
-            "custom_components.example_integration.config_flow.ExampleClient",
+            "custom_components.notes_vault.config_flow.NotesVaultClient",
             new=coordinator_client,
         ),
     ):
@@ -60,7 +60,7 @@ def config_entry() -> MockConfigEntry:
     """Return a configured entry, not yet added to Home Assistant."""
     return MockConfigEntry(
         domain=DOMAIN,
-        title="Example",
+        title="NotesVault",
         unique_id="ABC123",
         data={CONF_HOST: "192.0.2.10", CONF_PORT: 80, CONF_TOKEN: "secret"},
     )

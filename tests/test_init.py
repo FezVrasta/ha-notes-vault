@@ -9,7 +9,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.example_integration.api import ExampleAuthError, ExampleError
+from custom_components.notes_vault.api import NotesVaultAuthError, NotesVaultError
 
 
 async def test_setup_and_unload(
@@ -32,8 +32,8 @@ async def test_setup_and_unload(
 @pytest.mark.parametrize(
     ("error", "expected_state"),
     [
-        (ExampleError("unreachable"), ConfigEntryState.SETUP_RETRY),
-        (ExampleAuthError("bad token"), ConfigEntryState.SETUP_ERROR),
+        (NotesVaultError("unreachable"), ConfigEntryState.SETUP_RETRY),
+        (NotesVaultAuthError("bad token"), ConfigEntryState.SETUP_ERROR),
     ],
 )
 async def test_setup_failures(

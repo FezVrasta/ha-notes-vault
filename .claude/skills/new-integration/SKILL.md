@@ -21,7 +21,7 @@ Do not start by deleting things.
 scripts/bootstrap --domain growatt_datalogger --name "Growatt Datalogger"
 ```
 
-This renames `example_integration` everywhere, rewrites `Example*` class names from the
+This renames `notes_vault` everywhere, rewrites `NotesVault*` class names from the
 display name, points the manifest and badges at the `origin` remote, moves the component
 directory, replaces the template's README with a skeleton, and deletes itself. Run it
 **once**, before writing any code — it is a blunt string replacement and will happily

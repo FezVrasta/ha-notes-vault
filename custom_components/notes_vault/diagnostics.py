@@ -13,14 +13,14 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from . import ExampleConfigEntry
+from . import NotesVaultConfigEntry
 
 #: Anything that identifies a specific person's hardware or grants access to it.
 TO_REDACT = {"serial", "serial_number", "token", "password", "api_key", "unique_id"}
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: ExampleConfigEntry
+    hass: HomeAssistant, entry: NotesVaultConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     coordinator = entry.runtime_data

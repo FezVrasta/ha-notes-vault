@@ -15,20 +15,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-class ExampleError(Exception):
+class NotesVaultError(Exception):
     """The device answered, but not with something usable."""
 
 
-class ExampleAuthError(ExampleError):
+class NotesVaultAuthError(NotesVaultError):
     """The credentials were rejected.
 
-    Separate from `ExampleError` because Home Assistant treats it differently: it starts
+    Separate from `NotesVaultError` because Home Assistant treats it differently: it starts
     a reauth flow rather than retrying on a timer.
     """
 
 
 @dataclass(slots=True)
-class ExampleData:
+class NotesVaultData:
     """One poll's worth of readings."""
 
     serial: str
@@ -37,7 +37,7 @@ class ExampleData:
     online: bool
 
 
-class ExampleClient:
+class NotesVaultClient:
     """A minimal client for one device."""
 
     def __init__(self, host: str, port: int, token: str | None = None) -> None:
@@ -46,13 +46,13 @@ class ExampleClient:
         self.port = port
         self._token = token
 
-    async def fetch(self) -> ExampleData:
+    async def fetch(self) -> NotesVaultData:
         """Read the current state.
 
-        Raise `ExampleAuthError` when the credentials are refused and `ExampleError` for
+        Raise `NotesVaultAuthError` when the credentials are refused and `NotesVaultError` for
         anything else that is not fatal to the config entry.
         """
-        return ExampleData(
+        return NotesVaultData(
             serial=f"{self.host}:{self.port}",
             firmware="1.0.0",
             temperature=21.5,

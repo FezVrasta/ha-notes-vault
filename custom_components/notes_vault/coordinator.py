@@ -10,13 +10,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ExampleAuthError, ExampleClient, ExampleData, ExampleError
+from .api import NotesVaultAuthError, NotesVaultClient, NotesVaultData, NotesVaultError
 from .const import DOMAIN, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class ExampleCoordinator(DataUpdateCoordinator[ExampleData]):
+class NotesVaultCoordinator(DataUpdateCoordinator[NotesVaultData]):
     """Keeps one device's readings fresh."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -28,21 +28,21 @@ class ExampleCoordinator(DataUpdateCoordinator[ExampleData]):
             update_interval=SCAN_INTERVAL,
             config_entry=entry,
         )
-        self.client = ExampleClient(
+        self.client = NotesVaultClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
             token=entry.data.get(CONF_TOKEN),
         )
 
-    async def _async_update_data(self) -> ExampleData:
+    async def _async_update_data(self) -> NotesVaultData:
         try:
             return await self.client.fetch()
-        except ExampleAuthError as err:
+        except NotesVaultAuthError as err:
             # Raising this instead of UpdateFailed is what makes Home Assistant offer
             # the user a "reconfigure" prompt rather than retrying wrong credentials
             # every minute until the token is fixed by hand.
             raise ConfigEntryAuthFailed(str(err)) from err
-        except ExampleError as err:
+        except NotesVaultError as err:
             raise UpdateFailed(str(err)) from err
 
     async def async_shutdown(self) -> None:

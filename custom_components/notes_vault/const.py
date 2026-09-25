@@ -1,4 +1,4 @@
-"""Constants for the Example Integration."""
+"""Constants for the Notes Vault."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Final
 
 from homeassistant.const import Platform
 
-DOMAIN: Final = "example_integration"
+DOMAIN: Final = "notes_vault"
 
 PLATFORMS: Final = [
     Platform.BINARY_SENSOR,

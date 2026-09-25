@@ -6,10 +6,10 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import ExampleCoordinator
+from .coordinator import NotesVaultCoordinator
 
 
-class ExampleEntity(CoordinatorEntity[ExampleCoordinator]):
+class NotesVaultEntity(CoordinatorEntity[NotesVaultCoordinator]):
     """Base for every entity this integration creates.
 
     `_attr_has_entity_name` plus a translation key is the modern naming contract: the
@@ -20,7 +20,7 @@ class ExampleEntity(CoordinatorEntity[ExampleCoordinator]):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: ExampleCoordinator, key: str) -> None:
+    def __init__(self, coordinator: NotesVaultCoordinator, key: str) -> None:
         """Bind the entity to the coordinator and give it its permanent ID."""
         super().__init__(coordinator)
         self._key = key
@@ -34,8 +34,8 @@ class ExampleEntity(CoordinatorEntity[ExampleCoordinator]):
         data = self.coordinator.data
         return DeviceInfo(
             identifiers={(DOMAIN, data.serial)},
-            manufacturer="Example",
-            model="Example Device",
+            manufacturer="NotesVault",
+            model="NotesVault Device",
             name=self.coordinator.config_entry.title,
             serial_number=data.serial,
             sw_version=data.firmware,
