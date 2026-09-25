@@ -153,6 +153,52 @@ TABLE name, device FROM #ha/light AND [[Kitchen]]
 
 Obsidian-side MCP servers such as [mcp-obsidian](https://github.com/MarkusPfundstein/mcp-obsidian) talk to Obsidian through the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin. With it installed, an assistant can work on the synced copy of the vault from your computer.
 
+## Templates
+
+Starting a note in Home Assistant pre-fills it from a template, picked to fit what the note is about, and a **Template** dropdown switches to another one or to a blank note. Generated notes stay empty until you write something, so templates never add files of their own.
+
+Templates are Markdown files in `Home Assistant/Templates/`, so you edit them in Obsidian like any other note (and Obsidian's own Templates plugin can use the same folder). The defaults cover the common cases:
+
+| Template | For |
+| --- | --- |
+| Device | Any device: location, purchase and warranty, manual, maintenance log |
+| Appliance | Devices with a climate, water heater, vacuum, fan, humidifier or mower entity: model, consumables and when they were replaced |
+| Battery device | Devices with a battery sensor: battery type and a replacement log |
+| Network device | Devices from UniFi, FRITZ!Box, Omada, OpenWrt, ASUSWRT, Netgear, MikroTik or Synology: IP, VLAN, admin URL, firmware log |
+| Entity | Any entity: what it's for, quirks |
+| Light | Lights: bulb, socket, wattage, wall switch, breaker, replacement log |
+| Sensor | Sensors and binary sensors: placement, calibration |
+| Automation | Automations and scripts: why it exists, how it works, decisions |
+| Lock and security | Locks and alarm panels: where codes and keys are kept (never the codes), battery, service contact |
+| Area | Areas: layout, breakers, network |
+
+They're written once, when the folder doesn't exist yet, and never overwritten. Delete the folder to get the defaults back.
+
+A template says what it applies to in its frontmatter:
+
+```markdown
+---
+ha_template:
+  applies_to: device              # entity, device or area
+  entity_device_classes: [battery]
+---
+## Battery
+- Type:
+
+## Battery log
+- {{date}}: replaced
+```
+
+| Criterion | Matches |
+| --- | --- |
+| `domains` | Entity domain (`light`, `sensor`) |
+| `device_classes` | Entity device class (`temperature`, `battery`) |
+| `integrations` | The integration providing the entity or device (`hue`, `zha`) |
+| `entity_domains` | Devices that have an entity of this domain |
+| `entity_device_classes` | Devices that have an entity of this device class |
+
+Every criterion a template sets has to match, and the template setting the most criteria wins. One with none is the fallback for its kind. Placeholders: `{{name}}`, `{{entity_id}}`, `{{device}}`, `{{area}}`, `{{manufacturer}}`, `{{model}}`, `{{integration}}` and `{{date}}`. Anything else in double braces is left as is, for Obsidian to fill.
+
 ## AI and MCP
 
 You don't need an Obsidian MCP server to let an assistant use the vault. Any MCP server for Home Assistant that can call actions can use these:
@@ -161,6 +207,8 @@ You don't need an Obsidian MCP server to let an assistant use the vault. Any MCP
 | --- | --- |
 | `notes_vault.get_note` | Returns the note of an entity, device or area, with its path and wikilink |
 | `notes_vault.set_note` | Replaces or appends to that note |
+| `notes_vault.get_template` | Returns a template filled in for an entity, device or area, the best fit unless you name one |
+| `notes_vault.list_templates` | Lists the templates and what each applies to |
 | `notes_vault.search` | Finds notes containing every word of a query |
 | `notes_vault.list_files` | Lists a folder |
 | `notes_vault.read_file` | Returns any file in the vault |
@@ -168,7 +216,7 @@ You don't need an Obsidian MCP server to let an assistant use the vault. Any MCP
 | `notes_vault.delete_file` | Deletes a file or folder |
 | `notes_vault.sync` | Re-reads the vault and regenerates the notes now |
 
-`get_note` is available to every user. The rest need an administrator, because the vault can hold anything, not just notes on entities.
+While a note is empty, `get_note` also returns the template that fits it, so an assistant writing a note for the first time follows the same structure you would. `get_note`, `get_template` and `list_templates` are available to every user. The rest need an administrator, because the vault can hold anything, not just notes on entities.
 
 Every write fires a `notes_vault_updated` event with the path and, for generated notes, the entity, device or area ID, whichever way it came in (UI, action or WebDAV).
 

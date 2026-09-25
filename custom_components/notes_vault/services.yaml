@@ -31,6 +31,32 @@ set_note:
       selector:
         boolean:
 
+get_template:
+  fields:
+    entity_id:
+      selector:
+        entity:
+    device_id:
+      selector:
+        device:
+    area_id:
+      selector:
+        area:
+    template:
+      example: "Light"
+      selector:
+        text:
+
+list_templates:
+  fields:
+    applies_to:
+      selector:
+        select:
+          options:
+            - entity
+            - device
+            - area
+
 read_file:
   fields:
     path:

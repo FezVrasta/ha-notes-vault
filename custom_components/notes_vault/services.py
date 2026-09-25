@@ -46,6 +46,10 @@ TARGET_SCHEMA = {
 }
 
 GET_NOTE_SCHEMA = vol.Schema(TARGET_SCHEMA)
+GET_TEMPLATE_SCHEMA = vol.Schema({**TARGET_SCHEMA, vol.Optional("template"): cv.string})
+LIST_TEMPLATES_SCHEMA = vol.Schema(
+    {vol.Optional("applies_to"): vol.In(["entity", "device", "area"])}
+)
 SET_NOTE_SCHEMA = vol.Schema(
     {
         **TARGET_SCHEMA,
@@ -224,6 +228,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
     only = SupportsResponse.ONLY
     optional = SupportsResponse.OPTIONAL
     hass.services.async_register(DOMAIN, "get_note", get_note, GET_NOTE_SCHEMA, only)
+    _async_setup_template_services(hass)
     # Everything that writes, or reads beyond a single object's note, needs an
     # administrator: the vault can hold anything, not just notes on entities.
     for name, func, schema, response in (
@@ -236,3 +241,33 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ("sync", sync, vol.Schema({}), optional),
     ):
         async_register_admin_service(hass, DOMAIN, name, func, schema, response)
+
+
+@callback
+def _async_setup_template_services(hass: HomeAssistant) -> None:
+    """Register the template actions. Open to every user, like get_note."""
+
+    async def get_template(call: ServiceCall) -> ServiceResponse:
+        manager = _manager(hass)
+        result = await manager.async_template(
+            _target(manager, call.data), call.data.get("template")
+        )
+        if result is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_template",
+                translation_placeholders={"name": call.data.get("template") or ""},
+            )
+        return result
+
+    async def list_templates(call: ServiceCall) -> ServiceResponse:
+        manager = _manager(hass)
+        return {"templates": await manager.async_templates(call.data.get("applies_to"))}
+
+    only = SupportsResponse.ONLY
+    hass.services.async_register(
+        DOMAIN, "get_template", get_template, GET_TEMPLATE_SCHEMA, only
+    )
+    hass.services.async_register(
+        DOMAIN, "list_templates", list_templates, LIST_TEMPLATES_SCHEMA, only
+    )

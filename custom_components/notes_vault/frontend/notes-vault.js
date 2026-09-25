@@ -79,7 +79,26 @@ const STYLE = `
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-const NOTE_SCHEMA = [{ name: "note", selector: { text: { multiline: true } } }];
+const NOTE_FIELD = { name: "note", selector: { text: { multiline: true } } };
+const BLANK = "__blank__";
+
+/** The editor's fields: a template picker while starting a note, then the text. */
+const editorSchema = (templates) =>
+  templates?.length
+    ? [
+        {
+          name: "template",
+          required: true,
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [...templates.map((t) => ({ value: t, label: t })), { value: BLANK, label: "Blank" }],
+            },
+          },
+        },
+        NOTE_FIELD,
+      ]
+    : [NOTE_FIELD];
 
 class NotesVaultNote extends HTMLElement {
   constructor() {
@@ -187,15 +206,45 @@ class NotesVaultNote extends HTMLElement {
     this._render();
   }
 
-  _edit() {
-    this._state = { ...this._state, editing: true, draft: this._state.note || "" };
+  async _edit() {
+    const starting = !this._state.note;
+    this._state = { ...this._state, editing: true, draft: this._state.note || "", templates: undefined };
+    // A new note starts from the template that fits it, with the others on offer.
+    if (starting) {
+      try {
+        const result = await this.hass.callWS({ type: "notes_vault/template", ...this._target });
+        this._state.templates = result.templates;
+        this._state.templateName = result.template?.name ?? BLANK;
+        this._state.draft = result.template?.body ?? "";
+      } catch (err) {
+        // No templates: start blank.
+      }
+    }
     this._render();
     // ha-form loads the text selector lazily; focus once it has rendered.
     setTimeout(() => this.shadowRoot.querySelector("ha-form")?.focus?.(), 200);
   }
 
+  async _pickTemplate(name) {
+    this._state.templateName = name;
+    if (name === BLANK) {
+      this._state.draft = "";
+    } else {
+      const result = await this.hass.callWS({ type: "notes_vault/template", name, ...this._target });
+      this._state.draft = result.template?.body ?? "";
+    }
+    this._render();
+  }
+
   _cancel() {
-    this._state = { ...this._state, editing: false, draft: undefined, error: undefined };
+    this._state = {
+      ...this._state,
+      editing: false,
+      draft: undefined,
+      error: undefined,
+      templates: undefined,
+      templateName: undefined,
+    };
     this._render();
   }
 
@@ -256,14 +305,20 @@ class NotesVaultNote extends HTMLElement {
     const form = this.shadowRoot.querySelector("ha-form");
     if (form) {
       form.hass = this.hass;
-      form.schema = NOTE_SCHEMA;
-      form.data = { note: s.draft ?? "" };
+      form.schema = editorSchema(s.templates);
+      form.data = { note: s.draft ?? "", template: s.templateName };
       form.disabled = !!s.saving;
-      form.computeLabel = () => "";
-      form.computeHelper = () => "Markdown. Link with [[light.kitchen]] or [[Device name]].";
+      form.computeLabel = (field) => (field.name === "template" ? "Template" : "");
+      form.computeHelper = (field) =>
+        field.name === "note" ? "Markdown. Link with [[light.kitchen]] or [[Device name]]." : "";
       form.addEventListener("value-changed", (ev) => {
-        this._state.draft = ev.detail.value.note ?? "";
-        form.data = { note: this._state.draft };
+        const value = ev.detail.value;
+        if (value.template && value.template !== this._state.templateName) {
+          this._pickTemplate(value.template);
+          return;
+        }
+        this._state.draft = value.note ?? "";
+        form.data = { note: this._state.draft, template: this._state.templateName };
       });
     }
 

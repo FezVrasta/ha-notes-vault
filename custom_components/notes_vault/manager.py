@@ -37,6 +37,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BASE_FOLDER,
@@ -59,6 +60,13 @@ from .const import (
     KIND_DEVICE,
     KIND_ENTITY,
     SYNC_DEBOUNCE,
+)
+from .templates import (
+    DEFAULT_TEMPLATES,
+    Template,
+    best_template,
+    parse_template,
+    render,
 )
 from .vault import (
     MARKDOWN_SUFFIX,
@@ -231,6 +239,7 @@ class NotesVault:
     async def async_start(self) -> None:
         """Scan the vault, generate the notes and start following registry changes."""
         await self.hass.async_add_executor_job(self.vault.ensure)
+        await self.hass.async_add_executor_job(self._seed_templates)
         await self.hass.async_add_executor_job(self._scan)
         self._debouncer = Debouncer(
             self.hass,
@@ -738,7 +747,13 @@ class NotesVault:
             path = path or (
                 f"{doc.folder}/{doc.stem}{MARKDOWN_SUFFIX}" if doc else None
             )
+        # An empty note comes with the template that fits it, so the UI can offer it
+        # and an assistant knows what shape of note is expected.
+        template = None
+        if note is None or not note.body.strip():
+            template = await self.async_template(key)
         return {
+            "template": template,
             "path": path,
             "link": wikilink(path, PurePosixPath(link_target(path)).name)
             if path
@@ -822,6 +837,119 @@ class NotesVault:
         self.vault.write_text(path, text)
         self._written.pop(key, None)
         return path
+
+    # -- Templates -----------------------------------------------------------------
+
+    @property
+    def templates_folder(self) -> str:
+        """Folder holding the note templates."""
+        return f"{self.base}/Templates" if self.base else "Templates"
+
+    def _seed_templates(self) -> None:
+        """Write the default templates the first time. Runs in the executor.
+
+        Only when the folder does not exist: once it does, it is the user's, and a
+        template they deleted stays deleted. Removing the folder brings them back.
+        """
+        if self.vault.exists(self.templates_folder):
+            return
+        for name, text in DEFAULT_TEMPLATES.items():
+            self.vault.write_text(
+                f"{self.templates_folder}/{name}{MARKDOWN_SUFFIX}", text
+            )
+
+    def _load_templates(self) -> list[Template]:
+        """Read every template in the folder. Runs in the executor."""
+        if not self.vault.exists(self.templates_folder):
+            return []
+        templates: list[Template] = []
+        for path in self.vault.iter_markdown(self.templates_folder):
+            try:
+                note = self.vault.read_note(path)
+            except (OSError, VaultError):
+                continue
+            name = PurePosixPath(link_target(path)).name
+            if template := parse_template(name, path, note):
+                templates.append(template)
+        return sorted(templates, key=lambda t: t.name)
+
+    @callback
+    def _template_context(
+        self, docs: dict[DocKey, Doc], key: DocKey
+    ) -> tuple[dict[str, list[str]], dict[str, Any]]:
+        """Return what a template can match on, and the placeholder values."""
+        doc = docs[key]
+        m = doc.managed
+        facts: dict[str, list[str]] = {}
+        values: dict[str, Any] = {
+            "name": doc.name,
+            "date": dt_util.now().date().isoformat(),
+        }
+        device_doc = None
+        if doc.kind == KIND_ENTITY:
+            facts = {
+                "domains": [m["domain"]],
+                "device_classes": [m["device_class"]] if m.get("device_class") else [],
+                "integrations": [m["integration"]] if m.get("integration") else [],
+            }
+            values["entity_id"] = m["entity_id"]
+            values["integration"] = m.get("integration")
+            if m.get("device"):
+                device_doc = docs.get((KIND_DEVICE, m["device"]))
+        elif doc.kind == KIND_DEVICE:
+            device_doc = doc
+            entities = [
+                d
+                for d in docs.values()
+                if d.kind == KIND_ENTITY and d.managed.get("device") == doc.ha_id
+            ]
+            facts = {
+                "integrations": list(m.get("integration") or []),
+                "entity_domains": sorted({d.managed["domain"] for d in entities}),
+                "entity_device_classes": sorted(
+                    {c for d in entities if (c := d.managed.get("device_class"))}
+                ),
+            }
+            values["integration"] = ", ".join(m.get("integration") or [])
+        if device_doc:
+            values["device"] = device_doc.name
+            values["manufacturer"] = device_doc.managed.get("manufacturer")
+            values["model"] = device_doc.managed.get("model")
+        area_id = m.get("area_id") if doc.kind == KIND_AREA else m.get("area")
+        if area_id and (area_doc := docs.get((KIND_AREA, area_id))):
+            values["area"] = area_doc.name
+        return facts, values
+
+    async def async_templates(self, kind: str | None = None) -> list[dict[str, Any]]:
+        """List the templates, optionally only those for one kind of object."""
+        templates = await self.hass.async_add_executor_job(self._load_templates)
+        return [
+            {
+                "name": t.name,
+                "path": t.path,
+                "applies_to": t.applies_to,
+                "criteria": {k: sorted(v) for k, v in t.criteria.items()},
+            }
+            for t in templates
+            if kind is None or t.applies_to == kind
+        ]
+
+    async def async_template(
+        self, key: DocKey, name: str | None = None
+    ) -> dict[str, Any] | None:
+        """Render the named template, or the best match, for an object."""
+        templates = await self.hass.async_add_executor_job(self._load_templates)
+        docs = self.build_docs()
+        if key not in docs:
+            return None
+        facts, values = self._template_context(docs, key)
+        if name is None:
+            template = best_template(templates, key[0], facts)
+        else:
+            template = next((t for t in templates if t.name == name), None)
+        if template is None:
+            return None
+        return {"name": template.name, "body": render(template.body, values)}
 
     # -- Anything else in the vault ------------------------------------------------
 

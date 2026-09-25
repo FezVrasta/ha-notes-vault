@@ -33,6 +33,7 @@ def async_setup_websocket(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_info)
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_set)
+    websocket_api.async_register_command(hass, ws_template)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "notes_vault/info"})
@@ -101,3 +102,37 @@ async def ws_set(
         connection.send_error(msg["id"], "not_found", str(err))
         return
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "notes_vault/template",
+        vol.Optional("name"): vol.Any(str, None),
+        **_TARGET,
+    }
+)
+@websocket_api.async_response
+async def ws_template(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Render a template for an object and list the ones that could apply to it."""
+    manager = _manager(hass)
+    if manager is None:
+        connection.send_error(msg["id"], "not_loaded", "Notes Vault is not loaded")
+        return
+    try:
+        key = manager.resolve_target(
+            entity_id=msg.get("entity_id"),
+            device_id=msg.get("device_id"),
+            area_id=msg.get("area_id"),
+        )
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "template": await manager.async_template(key, msg.get("name")),
+            "templates": [t["name"] for t in await manager.async_templates(key[0])],
+        },
+    )

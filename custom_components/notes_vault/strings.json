@@ -168,6 +168,38 @@
     "sync": {
       "name": "Sync",
       "description": "Re-reads the vault and regenerates the entity, device and area notes now."
+    },
+    "get_template": {
+      "name": "Get template",
+      "description": "Returns a note template filled in for an entity, device or area. Without a template name, returns the one that fits best.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "The entity to fill the template in for."
+        },
+        "device_id": {
+          "name": "Device",
+          "description": "The device to fill the template in for."
+        },
+        "area_id": {
+          "name": "Area",
+          "description": "The area to fill the template in for."
+        },
+        "template": {
+          "name": "Template",
+          "description": "Name of the template file, without .md. Leave empty for the best match."
+        }
+      }
+    },
+    "list_templates": {
+      "name": "List templates",
+      "description": "Lists the note templates in the vault and what each one applies to.",
+      "fields": {
+        "applies_to": {
+          "name": "Applies to",
+          "description": "Only list templates for entities, devices or areas."
+        }
+      }
     }
   },
   "exceptions": {
@@ -191,6 +223,9 @@
     },
     "file_not_found": {
       "message": "{path} doesn't exist in the vault."
+    },
+    "no_template": {
+      "message": "No template {name} fits this."
     }
   }
 }
