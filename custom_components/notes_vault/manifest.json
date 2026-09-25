@@ -8,6 +8,7 @@
   "dependencies": [
     "frontend",
     "http",
+    "panel_custom",
     "websocket_api"
   ],
   "documentation": "https://github.com/FezVrasta/ha-notes-vault",

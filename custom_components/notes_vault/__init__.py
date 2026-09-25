@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
@@ -12,7 +13,14 @@ from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_FOLDER, DEFAULT_FOLDER, DOMAIN, FRONTEND_SCRIPT, FRONTEND_URL
+from .const import (
+    CONF_FOLDER,
+    DEFAULT_FOLDER,
+    DOMAIN,
+    FRONTEND_SCRIPT,
+    FRONTEND_URL,
+    PANEL_URL,
+)
 from .manager import NotesVault
 from .services import async_setup_services
 from .vault import Vault
@@ -52,6 +60,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotesVaultConfigEntry) -
     script = await hass.async_add_executor_job(_script_url)
     add_extra_js_url(hass, script)
     entry.async_on_unload(lambda: remove_extra_js_url(hass, script))
+    # The sidebar panel. Same script URL as above, so the browser evaluates it once.
+    await panel_custom.async_register_panel(
+        hass,
+        frontend_url_path=PANEL_URL,
+        webcomponent_name="notes-vault-panel",
+        sidebar_title="Notes",
+        sidebar_icon="mdi:notebook-outline",
+        module_url=script,
+        require_admin=True,
+    )
+    entry.async_on_unload(lambda: frontend.async_remove_panel(hass, PANEL_URL))
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
     async def _start(_event: Event | None = None) -> None:

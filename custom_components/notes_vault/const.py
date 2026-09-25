@@ -54,6 +54,8 @@ DAV_COLLECTION: Final = "vault"
 
 FRONTEND_URL: Final = "/notes_vault_static"
 FRONTEND_SCRIPT: Final = "notes-vault.js"
+#: Sidebar panel with every note in the vault.
+PANEL_URL: Final = "notes-vault"
 
 #: Fired whenever a note changes through Home Assistant (UI, service or WebDAV).
 EVENT_NOTE_UPDATED: Final = "notes_vault_updated"

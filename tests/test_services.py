@@ -51,8 +51,16 @@ async def test_links_resolve_to_home_assistant_objects(
     )
     result = await _call(hass, "get_note", device_id=home["device"].id)
     assert result["links"] == {
-        "Home Assistant/Areas/Kitchen": {"type": "area", "id": home["area"].id},
-        "light.kitchen_ceiling": {"type": "entity", "id": "light.kitchen_ceiling"},
+        "Home Assistant/Areas/Kitchen": {
+            "path": "Home Assistant/Areas/Kitchen.md",
+            "type": "area",
+            "id": home["area"].id,
+        },
+        "light.kitchen_ceiling": {
+            "path": "Home Assistant/Entities/light.kitchen_ceiling.md",
+            "type": "entity",
+            "id": "light.kitchen_ceiling",
+        },
     }
 
 

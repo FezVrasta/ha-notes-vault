@@ -43,10 +43,11 @@ Notes Vault keeps a folder of Markdown files inside your Home Assistant config d
   </tr>
 </table>
 
-- **Notes in the Home Assistant UI.** Add or edit a note from any entity's more-info dialog, and from device and area pages. Notes are Markdown, and wikilinks work: a link to an entity opens its more-info dialog, a link to a device or area opens its page.
+- **Notes in the Home Assistant UI.** Add or edit a note from any entity's more-info dialog, and from device and area pages. Notes are Markdown, and wikilinks work: a link to an entity opens its more-info dialog, a link to a device or area opens its page, and a link to any other note opens it in the Notes panel.
 - **A generated note per entity, device and area.** The frontmatter carries the name, IDs, integration, area, device and labels, with links between them, so Obsidian's backlinks and graph show how your home fits together. Renaming an entity ID renames its note and rewrites the links pointing at it.
 - **Sync with Obsidian.** A WebDAV endpoint on Home Assistant's own web server, authenticated with a long-lived access token. Built and tested against remotely-save.
 - **Actions for AI and automations.** Get, set and append notes, read and write any file, list folders, and search the vault. They return response data, so any Home Assistant MCP server can use them.
+- **A Notes panel.** **Notes** in the sidebar lists every note in the vault as a tree, with search, and opens any of them in the same editor, with the notes that link to it underneath. Administrators only, since the vault can hold anything.
 - **A dashboard card.** `custom:notes-vault-card` shows and edits the note of one entity, device or area.
 
 ## Install
@@ -84,13 +85,13 @@ ha_url: https://ha.example.com/history?entity_id=light.kitchen_ceiling
 aliases:
 - Ceiling lamp
 tags:
-- ha/entity
-- ha/light
+- Home-Assistant/Entity
+- Home-Assistant/Entity/Light
 ---
 Bulb is an E27, 2700K. Replaced 2026-01-10.
 ```
 
-Home Assistant owns the frontmatter keys it writes and leaves everything else alone: the body, and any keys you add yourself. `aliases` and `tags` are merged, so yours stay. A note is only rewritten when its generated metadata changes, which keeps sync conflicts rare.
+Home Assistant owns the frontmatter keys it writes and leaves everything else alone: the body, and any keys you add yourself. `aliases` are merged, so yours stay. Tags under `Home-Assistant/` are generated (`Home-Assistant/Entity/Air-Quality`, `Home-Assistant/Device/Philips-Hue`, `Home-Assistant/Area`), named after the integration so the tag pane reads as a tree of your home; any other tag you add is kept. A note is only rewritten when its generated metadata changes, which keeps sync conflicts rare.
 
 Everything outside `Home Assistant/` is yours. Notes Vault never touches it except to follow renames of the generated notes.
 
@@ -145,7 +146,7 @@ Links still work either way: type `[[Ceiling` and pick the alias, and Obsidian i
 
 ````markdown
 ```dataview
-TABLE name, device FROM #ha/light AND [[Kitchen]]
+TABLE name, device FROM #Home-Assistant/Entity/Light AND [[Kitchen]]
 ```
 ````
 

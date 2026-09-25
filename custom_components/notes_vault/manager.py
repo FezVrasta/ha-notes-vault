@@ -37,6 +37,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.loader import Integration, async_get_integrations
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -175,6 +176,27 @@ def _plain(value: Any) -> Any:
     return str(value)
 
 
+#: Every tag the generator writes lives under this, and is rewritten on each sync.
+TAG_ROOT = "Home-Assistant"
+#: Written by versions before 0.1.0 and removed on sync.
+_LEGACY_TAG_ROOT = "ha/"
+
+
+def _is_generated_tag(tag: Any) -> bool:
+    return isinstance(tag, str) and (
+        tag == TAG_ROOT or tag.startswith((f"{TAG_ROOT}/", _LEGACY_TAG_ROOT))
+    )
+
+
+def tag_part(name: str) -> str:
+    """Turn a display name into one level of an Obsidian tag.
+
+    Tags cannot hold spaces or most punctuation, so "Air Quality" becomes
+    "Air-Quality" and "FRITZ!Box" becomes "FRITZ-Box".
+    """
+    return re.sub(r"[^\w]+", "-", name, flags=re.UNICODE).strip("-") or "Other"
+
+
 def _stem_matches(stem: str, base: str) -> bool:
     """Return whether an existing file name still fits the object's name."""
     return (
@@ -198,7 +220,8 @@ def merge_frontmatter(
             aliases.append(alias)
     if aliases:
         merged["aliases"] = aliases
-    tags = list(_as_list(current.get("tags")))
+    # Tags under the generated namespace are replaced; the user's own are kept.
+    tags = [t for t in _as_list(current.get("tags")) if not _is_generated_tag(t)]
     for tag in doc.tags:
         if tag not in tags:
             tags.append(tag)
@@ -233,6 +256,9 @@ class NotesVault:
         self._debouncer: Debouncer | None = None
         self.last_sync: dict[str, int] = {}
         self._base_url: str | None = None
+        #: Display names of integrations and entity domains ("air_quality" is
+        #: "Air Quality"), used for readable tags. Filled before each sync.
+        self._integration_names: dict[str, str] = {}
 
     # -- Lifecycle -----------------------------------------------------------------
 
@@ -288,6 +314,23 @@ class NotesVault:
 
     # -- Building the docs ---------------------------------------------------------
 
+    def _integration_name(self, domain: str) -> str:
+        return self._integration_names.get(domain) or domain.replace("_", " ").title()
+
+    async def _async_load_integration_names(self) -> None:
+        """Look up the display name of every domain and integration in use."""
+        domains = {e.domain for e in er.async_get(self.hass).entities.values()}
+        domains |= {e.platform for e in er.async_get(self.hass).entities.values()}
+        domains |= {s.domain for s in self.hass.states.async_all()}
+        domains |= {e.domain for e in self.hass.config_entries.async_entries()}
+        missing = domains - set(self._integration_names)
+        if not missing:
+            return
+        found = await async_get_integrations(self.hass, missing)
+        for domain, integration in found.items():
+            if isinstance(integration, Integration):
+                self._integration_names[domain] = integration.name
+
     def _folder(self, kind: str) -> str:
         sub = {KIND_ENTITY: "Entities", KIND_DEVICE: "Devices", KIND_AREA: "Areas"}[
             kind
@@ -334,7 +377,7 @@ class NotesVault:
                 stem=safe_name(area.name),
                 wanted=opts[CONF_GENERATE_AREAS] and not (area.labels & exclude_labels),
                 aliases=sorted({area.name, *area.aliases}),
-                tags=["ha/area"],
+                tags=[f"{TAG_ROOT}/Area"],
             )
             doc.managed = {
                 "ha_type": KIND_AREA,
@@ -371,7 +414,13 @@ class NotesVault:
                 stem=safe_name(name),
                 wanted=bool(wanted),
                 aliases=[name],
-                tags=["ha/device"],
+                tags=[
+                    f"{TAG_ROOT}/Device",
+                    *(
+                        f"{TAG_ROOT}/Device/{tag_part(self._integration_name(d))}"
+                        for d in integrations
+                    ),
+                ],
             )
             doc.managed = {
                 "ha_type": KIND_DEVICE,
@@ -474,7 +523,10 @@ class NotesVault:
             stem=entity_id,
             wanted=wanted,
             aliases=[name] if name and name != entity_id else [],
-            tags=["ha/entity", f"ha/{domain}"],
+            tags=[
+                f"{TAG_ROOT}/Entity",
+                f"{TAG_ROOT}/Entity/{tag_part(self._integration_name(domain))}",
+            ],
         )
         doc.managed = {
             "ha_type": KIND_ENTITY,
@@ -678,6 +730,7 @@ class NotesVault:
 
     async def async_sync(self) -> dict[str, int]:
         """Regenerate the notes now."""
+        await self._async_load_integration_names()
         async with self.lock:
             docs = self.build_docs()
             stats = await self.hass.async_add_executor_job(self._apply, docs)
@@ -761,42 +814,131 @@ class NotesVault:
             "exists": note is not None,
             "note": note.body.strip("\n") if note else "",
             "frontmatter": note.frontmatter if note else {},
-            "links": self.resolve_links(note.body) if note else {},
+            "links": await self.async_resolve_links(note.body) if note else {},
             "mtime": mtime,
         }
 
+    def _markdown_paths(self) -> list[str]:
+        """List every note in the vault. Runs in the executor."""
+        return sorted(self.vault.iter_markdown())
+
     @callback
-    def resolve_links(self, text: str) -> dict[str, dict[str, str]]:
-        """Map each wikilink target in the text to the Home Assistant object behind it.
+    def ha_target(self, path: str) -> dict[str, str] | None:
+        """Return the entity, device or area a generated note belongs to."""
+        key = next((k for k, p in self.index.items() if p == path), None)
+        if key is None:
+            return None
+        kind, ha_id = key
+        if kind == KIND_ENTITY:
+            entry = er.async_get(self.hass).async_get(ha_id)
+            return {"type": kind, "id": entry.entity_id if entry else ha_id}
+        return {"type": kind, "id": ha_id}
+
+    async def async_resolve_links(self, text: str) -> dict[str, dict[str, str]]:
+        """Map each wikilink target in the text to the note and object behind it.
 
         Targets resolve the way Obsidian resolves them: by full path, or by file name
-        alone. Links to notes that are not generated (the user's own notes) are left
-        out, since Home Assistant has nothing to show for them.
+        alone. Each resolved link has the note's `path`, and for generated notes the
+        `type` and `id` of the entity, device or area. Unresolved links are left out.
         """
         targets = {m.group(1).strip() for m in _WIKILINK.finditer(text)}
         if not targets:
             return {}
-        by_target: dict[str, DocKey] = {}
-        for key, path in self.index.items():
+        paths = await self.hass.async_add_executor_job(self._markdown_paths)
+        by_target: dict[str, str] = {}
+        for path in paths:
             full = link_target(path)
-            by_target.setdefault(full, key)
-            by_target.setdefault(PurePosixPath(full).name, key)
-        ent_reg = er.async_get(self.hass)
+            by_target.setdefault(full, path)
+            by_target.setdefault(PurePosixPath(full).name, path)
         links: dict[str, dict[str, str]] = {}
         for target in targets:
-            key = by_target.get(target)
-            if key is None:
+            if (path := by_target.get(target)) is None:
                 continue
-            kind, ha_id = key
-            if kind == KIND_ENTITY:
-                entry = ent_reg.async_get(ha_id)
-                links[target] = {
-                    "type": kind,
-                    "id": entry.entity_id if entry else ha_id,
-                }
-            else:
-                links[target] = {"type": kind, "id": ha_id}
+            links[target] = {"path": path, **(self.ha_target(path) or {})}
         return links
+
+    def _backlinks(self, path: str) -> list[dict[str, str]]:
+        """Find the notes linking to a path, with the line that links. Runs in the executor."""
+        full = link_target(path)
+        stem = PurePosixPath(full).name
+        pattern = re.compile(
+            r"\[\[(?:" + re.escape(full) + "|" + re.escape(stem) + r")(?=[\]|#^])"
+        )
+        found: list[dict[str, str]] = []
+        for other in self.vault.iter_markdown():
+            if other == path:
+                continue
+            try:
+                text = self.vault.read_text(other)
+            except (OSError, VaultError):
+                continue
+            if not pattern.search(text):
+                continue
+            line = next((ln for ln in text.splitlines() if pattern.search(ln)), "")
+            found.append({"path": other, "snippet": line.strip()[:200]})
+        return found
+
+    async def async_get_file(self, path: str) -> dict[str, Any]:
+        """Return any note in the vault, with its resolved links and backlinks."""
+        path = self.vault.normalize(path)
+        try:
+            note, mtime = await self.hass.async_add_executor_job(
+                self._read_existing, ("file", path), path
+            )
+        except VaultError:
+            note, mtime = None, None
+        backlinks = await self.hass.async_add_executor_job(self._backlinks, path)
+        names = self._display_names()
+        for backlink in backlinks:
+            backlink["name"] = names.get(backlink["path"])
+        return {
+            "path": path,
+            "exists": note is not None,
+            "note": note.body.strip("\n") if note else "",
+            "frontmatter": note.frontmatter if note else {},
+            "links": await self.async_resolve_links(note.body) if note else {},
+            "backlinks": backlinks,
+            "ha": self.ha_target(path),
+            "mtime": mtime,
+        }
+
+    async def async_set_file(
+        self, path: str, body: str, *, source: str = "ui"
+    ) -> dict[str, Any]:
+        """Replace the body of any note, keeping its frontmatter. Creates it if missing."""
+        path = self.vault.normalize(path)
+        if not path.endswith(MARKDOWN_SUFFIX):
+            path += MARKDOWN_SUFFIX
+
+        def _write() -> None:
+            note = (
+                self.vault.read_note(path) if self.vault.exists(path) else Note({}, "")
+            )
+            text = body.strip("\n")
+            self.vault.write_text(
+                path, render_note(note.frontmatter, text + "\n" if text else "")
+            )
+
+        async with self.lock:
+            await self.hass.async_add_executor_job(_write)
+            await self.hass.async_add_executor_job(self.index_file, path)
+        self.file_changed(path, source)
+        return await self.async_get_file(path)
+
+    async def async_tree(self) -> list[dict[str, Any]]:
+        """List every note in the vault, with the display name of generated ones."""
+        paths = await self.hass.async_add_executor_job(self._markdown_paths)
+        names = self._display_names()
+        return [{"path": p, "name": names.get(p)} for p in paths]
+
+    @callback
+    def _display_names(self) -> dict[str, str]:
+        """Map the path of each generated note to the name of what it is about."""
+        return {
+            self.index[key]: doc.name
+            for key, doc in self.build_docs().items()
+            if key in self.index
+        }
 
     async def async_set_note(
         self, key: DocKey, content: str, *, append: bool = False, source: str = "ui"

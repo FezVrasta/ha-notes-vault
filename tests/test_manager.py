@@ -42,10 +42,14 @@ async def test_generates_linked_notes(
     assert fm["device"] == f"[[{DEVICES}/Ceiling lamp|Ceiling lamp]]"
     assert fm["area"] == f"[[{AREAS}/Kitchen|Kitchen]]"
     assert "Ceiling lamp" in fm["aliases"]
-    assert "ha/light" in fm["tags"]
+    assert fm["tags"] == ["Home-Assistant/Entity", "Home-Assistant/Entity/Light"]
 
     device = _read(vault_dir, f"{DEVICES}/Ceiling lamp.md").frontmatter
     assert device["manufacturer"] == "Signify"
+    assert device["tags"] == [
+        "Home-Assistant/Device",
+        "Home-Assistant/Device/Philips-Hue",
+    ]
     assert device["entities"] == [f"[[{ENTITIES}/light.kitchen_ceiling|Ceiling lamp]]"]
 
     area = _read(vault_dir, f"{AREAS}/Kitchen.md").frontmatter
@@ -64,7 +68,8 @@ async def test_note_survives_regeneration(
     fm = {
         **note.frontmatter,
         "bulb": "E27",
-        "tags": [*note.frontmatter["tags"], "mine"],
+        # A tag of the user's, and one from before tags were renamed.
+        "tags": [*note.frontmatter["tags"], "mine", "ha/light"],
     }
     path.write_text(render_note(fm, "Replaced 2026-01-10.\n"))
 
@@ -75,6 +80,7 @@ async def test_note_survives_regeneration(
     assert note.body == "Replaced 2026-01-10.\n"
     assert note.frontmatter["bulb"] == "E27"
     assert "mine" in note.frontmatter["tags"]
+    assert "ha/light" not in note.frontmatter["tags"]
     assert note.frontmatter["name"] == "Main light"
 
 
