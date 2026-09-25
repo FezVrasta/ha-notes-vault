@@ -1,41 +1,36 @@
 """Diagnostics dump.
 
-Worth writing before the first release rather than after the first bug report: it is the
-difference between "it doesn't work" and a file that says exactly what the device
-returned.
+Counts and settings only. Note contents and file names stay out: they are the user's
+writing, and the file names alone describe their home.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from collections import Counter
 from typing import Any
 
-from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import NotesVaultConfigEntry
-
-#: Anything that identifies a specific person's hardware or grants access to it.
-TO_REDACT = {"serial", "serial_number", "token", "password", "api_key", "unique_id"}
 
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: NotesVaultConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator = entry.runtime_data
+    manager = entry.runtime_data
+    by_kind = Counter(kind for kind, _ in manager.index)
 
-    return async_redact_data(
-        {
-            "entry": {
-                "data": dict(entry.data),
-                "options": dict(entry.options),
-                "unique_id": entry.unique_id,
-            },
-            "coordinator": {
-                "last_update_success": coordinator.last_update_success,
-                "data": asdict(coordinator.data) if coordinator.data else None,
-            },
-        },
-        TO_REDACT,
-    )
+    def _count() -> dict[str, int]:
+        files = markdown = 0
+        for info in manager.vault.walk():
+            files += 1
+            markdown += info.path.endswith(".md")
+        return {"files": files, "markdown": markdown}
+
+    return {
+        "entry": {"data": dict(entry.data), "options": dict(entry.options)},
+        "vault": await hass.async_add_executor_job(_count),
+        "generated_notes": dict(by_kind),
+        "last_sync": manager.last_sync,
+    }

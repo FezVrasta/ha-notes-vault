@@ -1,0 +1,95 @@
+get_note:
+  fields:
+    entity_id:
+      selector:
+        entity:
+    device_id:
+      selector:
+        device:
+    area_id:
+      selector:
+        area:
+
+set_note:
+  fields:
+    entity_id:
+      selector:
+        entity:
+    device_id:
+      selector:
+        device:
+    area_id:
+      selector:
+        area:
+    note:
+      required: true
+      selector:
+        text:
+          multiline: true
+    append:
+      default: false
+      selector:
+        boolean:
+
+read_file:
+  fields:
+    path:
+      required: true
+      example: "Home Assistant/Entities/light.kitchen.md"
+      selector:
+        text:
+
+write_file:
+  fields:
+    path:
+      required: true
+      example: "Projects/Garden irrigation.md"
+      selector:
+        text:
+    content:
+      required: true
+      selector:
+        text:
+          multiline: true
+    append:
+      default: false
+      selector:
+        boolean:
+
+delete_file:
+  fields:
+    path:
+      required: true
+      selector:
+        text:
+
+list_files:
+  fields:
+    folder:
+      example: "Home Assistant/Devices"
+      selector:
+        text:
+    recursive:
+      default: false
+      selector:
+        boolean:
+
+search:
+  fields:
+    query:
+      required: true
+      example: "battery replaced"
+      selector:
+        text:
+    limit:
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: box
+    folder:
+      selector:
+        text:
+
+sync:

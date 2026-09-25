@@ -2,70 +2,195 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to your device",
-        "description": "Enter the address of the device on your network.",
+        "title": "Set up Notes Vault",
+        "description": "Choose the folder, inside the Home Assistant configuration directory, that holds the vault. It's created if it doesn't exist, and it's part of every backup.",
         "data": {
-          "host": "Host",
-          "port": "Port",
-          "token": "Access token"
+          "folder": "Vault folder"
         },
         "data_description": {
-          "host": "The hostname or IP address. A static lease or a hostname survives a router reboot; a DHCP address may not.",
-          "token": "Leave empty if the device does not require one."
-        }
-      },
-      "reauth_confirm": {
-        "title": "Reconnect",
-        "description": "The saved credentials were rejected. Enter a fresh access token.",
-        "data": {
-          "token": "Access token"
-        }
-      },
-      "reconfigure": {
-        "title": "Change the connection",
-        "description": "Point this device at a new address.",
-        "data": {
-          "host": "Host",
-          "port": "Port",
-          "token": "Access token"
+          "folder": "Relative to the configuration directory, for example `notes_vault`. Point it at an existing Obsidian vault to keep using it."
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the device. Check the address and that it is powered on.",
-      "invalid_auth": "The device rejected those credentials.",
-      "unknown": "Something unexpected went wrong."
+      "invalid_folder": "Use a relative folder name without `..`, and not a hidden folder."
     },
     "abort": {
-      "already_configured": "This device is already set up.",
-      "reauth_successful": "Reconnected.",
-      "reconfigure_successful": "The connection was updated.",
-      "wrong_device": "That address belongs to a different device. Add it as a new entry instead."
+      "single_instance_allowed": "Notes Vault is already set up. There's only one vault."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Options",
-        "data": {}
-      }
-    }
-  },
-  "entity": {
-    "sensor": {
-      "temperature": {
-        "name": "Temperature"
+        "title": "Generated notes",
+        "description": "Every entity, device and area can get its own note, so you can link to it from Obsidian. Filters only stop empty notes from being generated: anything you've written a note on keeps its file.",
+        "data": {
+          "base_folder": "Folder for generated notes",
+          "generate_entities": "Generate entity notes",
+          "generate_devices": "Generate device notes",
+          "generate_areas": "Generate area notes",
+          "include_diagnostic": "Include diagnostic entities",
+          "include_config": "Include configuration entities",
+          "include_hidden": "Include hidden entities",
+          "include_disabled": "Include disabled entities and devices",
+          "exclude_domains": "Skip these domains",
+          "exclude_integrations": "Skip these integrations",
+          "exclude_labels": "Skip anything with these labels",
+          "exclude_devices": "Skip these devices and their entities",
+          "exclude_entities": "Skip these entities",
+          "webdav": "Serve the vault over WebDAV"
+        },
+        "data_description": {
+          "base_folder": "Inside the vault. Leave empty to put the Entities, Devices and Areas folders at the top level.",
+          "webdav": "Needed for the remotely-save plugin in Obsidian. Clients sign in with a long-lived access token of an administrator."
+        }
       }
     },
-    "binary_sensor": {
-      "online": {
-        "name": "Connectivity"
+    "error": {
+      "invalid_folder": "Use a relative folder name without `..`."
+    }
+  },
+  "services": {
+    "get_note": {
+      "name": "Get note",
+      "description": "Returns the note of an entity, device or area, with the path and wikilink of its file in the vault.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "The entity whose note to use."
+        },
+        "device_id": {
+          "name": "Device",
+          "description": "The device whose note to use."
+        },
+        "area_id": {
+          "name": "Area",
+          "description": "The area whose note to use."
+        }
       }
+    },
+    "set_note": {
+      "name": "Set note",
+      "description": "Replaces, or appends to, the note of an entity, device or area. The generated frontmatter is kept.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "The entity whose note to use."
+        },
+        "device_id": {
+          "name": "Device",
+          "description": "The device whose note to use."
+        },
+        "area_id": {
+          "name": "Area",
+          "description": "The area whose note to use."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Markdown text. Link to other things with wikilinks such as [[light.kitchen]]."
+        },
+        "append": {
+          "name": "Append",
+          "description": "Add to the end of the existing note instead of replacing it."
+        }
+      }
+    },
+    "read_file": {
+      "name": "Read file",
+      "description": "Returns the content of any file in the vault.",
+      "fields": {
+        "path": {
+          "name": "Path",
+          "description": "Relative to the vault, for example `Home Assistant/Entities/light.kitchen.md`."
+        }
+      }
+    },
+    "write_file": {
+      "name": "Write file",
+      "description": "Creates or overwrites a file in the vault. Missing folders are created.",
+      "fields": {
+        "path": {
+          "name": "Path",
+          "description": "Relative to the vault, for example `Projects/Garden irrigation.md`."
+        },
+        "content": {
+          "name": "Content",
+          "description": "The whole file, frontmatter included."
+        },
+        "append": {
+          "name": "Append",
+          "description": "Add to the end of the file instead of replacing it."
+        }
+      }
+    },
+    "delete_file": {
+      "name": "Delete file",
+      "description": "Deletes a file or folder from the vault. A generated note comes back, empty, at the next sync.",
+      "fields": {
+        "path": {
+          "name": "Path",
+          "description": "Relative to the vault."
+        }
+      }
+    },
+    "list_files": {
+      "name": "List files",
+      "description": "Lists the files in a folder of the vault.",
+      "fields": {
+        "folder": {
+          "name": "Folder",
+          "description": "Relative to the vault. Empty for the top level."
+        },
+        "recursive": {
+          "name": "Recursive",
+          "description": "Include everything below the folder."
+        }
+      }
+    },
+    "search": {
+      "name": "Search",
+      "description": "Finds notes containing every word of a query, in their path or content.",
+      "fields": {
+        "query": {
+          "name": "Query",
+          "description": "Words to look for. Case doesn't matter."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "Maximum number of results."
+        },
+        "folder": {
+          "name": "Folder",
+          "description": "Only search below this folder."
+        }
+      }
+    },
+    "sync": {
+      "name": "Sync",
+      "description": "Re-reads the vault and regenerates the entity, device and area notes now."
     }
   },
   "exceptions": {
-    "cannot_connect": {
-      "message": "Could not reach {host}."
+    "not_loaded": {
+      "message": "Notes Vault isn't set up or isn't loaded."
+    },
+    "no_target": {
+      "message": "Pass one of entity_id, device_id or area_id."
+    },
+    "unknown_entity": {
+      "message": "There's no entity {target}."
+    },
+    "unknown_device": {
+      "message": "There's no device {target}."
+    },
+    "unknown_area": {
+      "message": "There's no area {target}."
+    },
+    "invalid_path": {
+      "message": "{path} isn't a valid path inside the vault."
+    },
+    "file_not_found": {
+      "message": "{path} doesn't exist in the vault."
     }
   }
 }

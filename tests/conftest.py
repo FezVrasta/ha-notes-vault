@@ -2,22 +2,34 @@
 
 Home Assistant's own test fixtures come from `pytest-homeassistant-custom-component`,
 which registers itself as a pytest plugin — so the suite needs only the installed
-package, not a checkout of Home Assistant core. That package pins the Home Assistant
-version the suite runs against; bump it in `requirements-test.txt` to test against a
-newer one.
+package, not a checkout of Home Assistant core.
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
 
 import pytest
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import (
+    area_registry as ar,
+)
+from homeassistant.helpers import (
+    device_registry as dr,
+)
+from homeassistant.helpers import (
+    entity_registry as er,
+)
+from homeassistant.helpers.entity import EntityCategory
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.notes_vault.api import NotesVaultData
-from custom_components.notes_vault.const import DOMAIN
+from custom_components.notes_vault.const import (
+    CONF_FOLDER,
+    DEFAULT_OPTIONS,
+    DOMAIN,
+)
+from custom_components.notes_vault.manager import NotesVault
 
 
 @pytest.fixture(autouse=True)
@@ -25,42 +37,84 @@ def _enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Let Home Assistant load this integration in every test."""
 
 
-@pytest.fixture
-def device_data() -> NotesVaultData:
-    """One poll's worth of readings."""
-    return NotesVaultData(serial="ABC123", firmware="1.2.3", temperature=21.5, online=True)
+@pytest.fixture(autouse=True)
+def _config_dir(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Keep every vault in a throwaway config directory, not the shared test one."""
+    hass.config.config_dir = str(tmp_path)
 
 
 @pytest.fixture
-def mock_client(device_data: NotesVaultData) -> Generator[AsyncMock]:
-    """Patch the protocol client everywhere it is constructed.
-
-    Patching the class rather than the network means the tests never depend on a real
-    device, and a change to the wire protocol shows up in the protocol layer's own
-    tests instead of breaking every integration test at once.
-    """
-    with (
-        patch(
-            "custom_components.notes_vault.coordinator.NotesVaultClient",
-            autospec=True,
-        ) as coordinator_client,
-        patch(
-            "custom_components.notes_vault.config_flow.NotesVaultClient",
-            new=coordinator_client,
-        ),
-    ):
-        client = coordinator_client.return_value
-        client.fetch = AsyncMock(return_value=device_data)
-        client.close = AsyncMock()
-        yield client
+def vault_dir(tmp_path: Path) -> Path:
+    """Return the folder the vault lives in."""
+    return tmp_path / "notes_vault"
 
 
 @pytest.fixture
-def config_entry() -> MockConfigEntry:
+def options() -> dict:
+    """Options for the entry. Override in a test module to change the filters."""
+    return dict(DEFAULT_OPTIONS)
+
+
+@pytest.fixture
+def config_entry(options: dict) -> MockConfigEntry:
     """Return a configured entry, not yet added to Home Assistant."""
     return MockConfigEntry(
         domain=DOMAIN,
-        title="NotesVault",
-        unique_id="ABC123",
-        data={CONF_HOST: "192.0.2.10", CONF_PORT: 80, CONF_TOKEN: "secret"},
+        title="Notes Vault",
+        data={CONF_FOLDER: "notes_vault"},
+        options=options,
     )
+
+
+@pytest.fixture
+async def manager(
+    hass: HomeAssistant, config_entry: MockConfigEntry, vault_dir: Path
+) -> NotesVault:
+    """Set the integration up with Home Assistant already running."""
+    assert await async_setup_component(hass, "http", {})
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    return config_entry.runtime_data
+
+
+ENTITIES = "Home Assistant/Entities"
+DEVICES = "Home Assistant/Devices"
+AREAS = "Home Assistant/Areas"
+
+
+@pytest.fixture
+async def home(hass: HomeAssistant) -> dict:
+    """Create a kitchen with a lamp that has a light and a diagnostic sensor."""
+    source = MockConfigEntry(domain="hue")
+    source.add_to_hass(hass)
+    area = ar.async_get(hass).async_create("Kitchen")
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=source.entry_id,
+        identifiers={("hue", "lamp-1")},
+        name="Ceiling lamp",
+        manufacturer="Signify",
+        model="LCT015",
+    )
+    dr.async_get(hass).async_update_device(device.id, area_id=area.id)
+    ent_reg = er.async_get(hass)
+    light = ent_reg.async_get_or_create(
+        "light",
+        "hue",
+        "lamp-1-light",
+        device_id=device.id,
+        config_entry=source,
+        original_name="Ceiling lamp",
+        suggested_object_id="kitchen_ceiling",
+    )
+    diag = ent_reg.async_get_or_create(
+        "sensor",
+        "hue",
+        "lamp-1-rssi",
+        device_id=device.id,
+        config_entry=source,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_object_id="kitchen_ceiling_rssi",
+    )
+    hass.states.async_set(light.entity_id, "on", {"friendly_name": "Ceiling lamp"})
+    return {"area": area, "device": device, "light": light, "diag": diag}
