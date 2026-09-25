@@ -17,6 +17,7 @@ DEFAULT_BASE_FOLDER: Final = "Home Assistant"
 CONF_GENERATE_ENTITIES: Final = "generate_entities"
 CONF_GENERATE_DEVICES: Final = "generate_devices"
 CONF_GENERATE_AREAS: Final = "generate_areas"
+CONF_GENERATE_INTEGRATIONS: Final = "generate_integrations"
 CONF_INCLUDE_HIDDEN: Final = "include_hidden"
 CONF_INCLUDE_DISABLED: Final = "include_disabled"
 CONF_INCLUDE_DIAGNOSTIC: Final = "include_diagnostic"
@@ -33,6 +34,7 @@ DEFAULT_OPTIONS: Final = {
     CONF_GENERATE_ENTITIES: True,
     CONF_GENERATE_DEVICES: True,
     CONF_GENERATE_AREAS: True,
+    CONF_GENERATE_INTEGRATIONS: True,
     CONF_INCLUDE_HIDDEN: False,
     CONF_INCLUDE_DISABLED: False,
     CONF_INCLUDE_DIAGNOSTIC: False,
@@ -63,12 +65,14 @@ EVENT_NOTE_UPDATED: Final = "notes_vault_updated"
 KIND_ENTITY: Final = "entity"
 KIND_DEVICE: Final = "device"
 KIND_AREA: Final = "area"
+KIND_INTEGRATION: Final = "integration"
 
 #: Generated folder for each kind of note, inside the generated notes folder.
 KIND_FOLDERS: Final = {
     KIND_ENTITY: "Entities",
     KIND_DEVICE: "Devices",
     KIND_AREA: "Areas",
+    KIND_INTEGRATION: "Integrations",
 }
 #: Entity domains with a folder of their own: the home's logic, not its sensors.
 DOMAIN_FOLDERS: Final = {

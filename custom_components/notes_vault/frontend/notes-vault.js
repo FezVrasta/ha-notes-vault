@@ -52,12 +52,13 @@ const navigate = (href) => {
 
 const panelHref = (path) => `${PANEL_PATH}?path=${encodeURIComponent(path)}`;
 
-/** Where a link to an entity, device or area goes in Home Assistant. */
+/** Where a link to an entity, device, area or integration goes in Home Assistant. */
 const haHref = (ha) => {
   if (!ha) return null;
   if (ha.type === "entity") return `#notes-vault-entity=${ha.id}`;
   if (ha.type === "device") return `/config/devices/device/${encodeURIComponent(ha.id)}`;
   if (ha.type === "area") return `/config/areas/area/${encodeURIComponent(ha.id)}`;
+  if (ha.type === "integration") return `/config/integrations/integration/${encodeURIComponent(ha.id)}`;
   return null;
 };
 
@@ -386,7 +387,7 @@ class NotesVaultNote extends HTMLElement {
     } else if (!s.loading && !s.error && s.canEdit) {
       const extra = [];
       if (inPanel && s.ha) {
-        const label = { entity: "Show entity", device: "Go to device", area: "Go to area" }[s.ha.type];
+        const label = { entity: "Show entity", device: "Go to device", area: "Go to area", integration: "Go to integration" }[s.ha.type];
         extra.push(this._button("openInHa", label));
       }
       // Generated notes are named after what they're about, so only the user's

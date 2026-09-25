@@ -78,7 +78,7 @@ If `notes_vault` actions don't exist, the integration isn't installed or isn't l
 
 - `note` is the body only. The frontmatter is Home Assistant's and comes back separately.
 - `links` resolves every wikilink in the body to a path and, for entities, devices and areas, their type and ID. Follow the ones that look relevant (`get_note` for an entity, device or area, `read_file` for anything else).
-- For automations and scripts, the frontmatter lists the `entities`, `devices` and `areas` they touch. For entities, it has the `device` and `area`.
+- For automations and scripts, the frontmatter lists the `entities`, `devices` and `areas` they touch. For entities, it has the `device` and `area`, and for helpers (groups, template sensors, utility meters) the `entities` they're built from. An integration's note lists its devices and the entities without a device; read it with `read_file`, since the actions only target entities, devices and areas.
 - **An empty `note` with a `template`** means nobody has written anything yet. `template.body` is the structure the user expects for this kind of thing (see below).
 
 ## Writing a note
@@ -97,7 +97,7 @@ Link with wikilinks, the way the user does. Bare names resolve: `[[light.kitchen
 
 ```
 Home Assistant/            generated, one note per object
-  Areas/  Devices/  Entities/  Automations/  Scripts/  Scenes/
+  Areas/  Devices/  Entities/  Integrations/  Automations/  Scripts/  Scenes/
   Templates/               the note templates, editable Markdown
   Index.md                 every note with something written in it
 anything else              the user's own notes (Maintenance/, Projects/, ...)

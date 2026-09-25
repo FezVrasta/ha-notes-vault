@@ -52,7 +52,7 @@ The vault is a plain folder of Markdown files in the Obsidian format, so you can
 
 - **A Notes panel.** **Notes** in the sidebar lists every note in the vault as a tree, with search, and opens any of them in the editor, with the notes that link to it underneath. Create, rename, move and delete notes and folders there; links to them follow. Administrators only, since the vault can hold anything.
 - **Notes where you need them.** Add or edit a note from any entity's more-info dialog, from device and area pages, and in the automation, script and scene editors. Wikilinks work: a link to an entity opens its more-info dialog, a link to a device or area opens its page, and a link to any other note opens it in the Notes panel.
-- **A generated note per entity, device and area.** The frontmatter carries the name, IDs, integration, area, device and labels, with links between them, so backlinks and graph views show how your home fits together. Renaming an entity ID renames its note and rewrites the links pointing at it.
+- **A generated note per entity, device, area and integration.** The frontmatter carries the name, IDs, integration, area, device and labels, with links between them, so backlinks and graph views show how your home fits together. Helpers link to what they're built from, and automations to what they touch, templates included. Renaming an entity ID renames its note and rewrites the links pointing at it.
 - **Templates.** Each kind of thing starts from its own headings: a light asks for the bulb and the breaker, a battery device for the battery type and a replacement log. Agents get the same template, so their notes look like yours.
 - **Actions for AI and automations.** Read, write, append, list and search, all with response data, so any Home Assistant MCP server can use the vault without extra setup.
 - **Sync with Obsidian and compatible apps.** A WebDAV endpoint on Home Assistant's own web server, authenticated with a long-lived access token.
@@ -129,6 +129,7 @@ notes_vault/
 │   ├── Automations/automation.leak_alert.md
 │   ├── Devices/Ceiling lamp.md
 │   ├── Entities/light.kitchen_ceiling.md
+│   ├── Integrations/Philips Hue.md
 │   ├── Scenes/scene.movie_night.md
 │   ├── Scripts/script.goodnight.md
 │   └── Templates/
@@ -174,7 +175,11 @@ devices:
 ---
 ```
 
-Because those are links, the heat pump's backlinks in Obsidian list every automation, script and scene that controls it, and the graph shows the home's logic wired to its devices.
+Because those are links, the heat pump's backlinks in Obsidian list every automation, script and scene that controls it, and the graph shows the home's logic wired to its devices. Entities read only inside a template count too.
+
+Any other entity built from others links to them the same way, under `entities`: a group to its members, a template sensor to what its template reads, a utility meter or min/max sensor to its sources, a zone to the people in it. A helper nobody set up that way, and nothing uses, stays on its own in the graph, which is a fair hint that it can go.
+
+Every integration gets a note too, listing its devices and the entities that have no device. That's where the devices with no area end up: HACS repositories, add-ons, network clients, cloud services. Entities that belong to a device are reached through the device, so a big integration doesn't turn into one giant star.
 
 `Home Assistant/Index.md` lists every note with something written in it, grouped into your own notes (by folder), areas, devices, automations, scripts, scenes and entities. Notes still holding their untouched template are left out, so it's the quickest way to see what you (or an assistant) have actually written down. It's regenerated as notes change; don't edit it.
 
@@ -286,6 +291,10 @@ Leave **Alias** off: the notes already carry their name in `aliases`.
 
 Links still work either way: type `[[Ceiling` and pick the alias, and Obsidian inserts `[[light.kitchen_ceiling|Ceiling lamp]]`.
 
+### Obsidian: Graph view
+
+The templates in `Home Assistant/Templates/` aren't about anything in your home, so they float on their own in the graph. Hide them with `-path:"Home Assistant/Templates"` in the graph's filter, and add `-path:"Home Assistant/Index"` so the index doesn't pull every note you've written into one cluster.
+
 ### Obsidian: Dataview
 
 [Dataview](https://github.com/blacksmithgu/obsidian-dataview) turns the frontmatter into queries. For example, every light that links to the kitchen:
@@ -314,8 +323,8 @@ title: Kitchen lamp             # optional
 
 | Option | Default | |
 | --- | --- | --- |
-| Folder for generated notes | `Home Assistant` | Inside the vault. Empty puts `Entities/`, `Devices/` and `Areas/` at the top. |
-| Generate entity / device / area notes | on | |
+| Folder for generated notes | `Home Assistant` | Inside the vault. Empty puts `Entities/`, `Devices/`, `Areas/` and `Integrations/` at the top. |
+| Generate entity / device / area / integration notes | on | |
 | Include diagnostic / configuration entities | off | These make up a large share of most installs. |
 | Include hidden / disabled | off | |
 | Skip these domains | `geo_location` | Feeds create and drop these by the minute. |

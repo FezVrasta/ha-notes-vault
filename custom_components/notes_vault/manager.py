@@ -1,9 +1,9 @@
 """Keeps the generated notes in step with Home Assistant's registries.
 
-Every entity, device and area gets a Markdown file whose frontmatter Home Assistant
-owns and whose body belongs to the user. The body is the note shown in the Home
-Assistant UI; the frontmatter is what makes ``[[light.kitchen]]`` a useful link in
-Obsidian.
+Every entity, device, area and integration gets a Markdown file whose frontmatter
+Home Assistant owns and whose body belongs to the user. The body is the note shown in
+the Home Assistant UI; the frontmatter is what makes ``[[light.kitchen]]`` a useful
+link in Obsidian.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 from homeassistant.helpers.debounce import Debouncer
+from homeassistant.helpers.entity_platform import async_get_platforms
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import Integration, async_get_integrations
@@ -52,6 +53,7 @@ from .const import (
     CONF_GENERATE_AREAS,
     CONF_GENERATE_DEVICES,
     CONF_GENERATE_ENTITIES,
+    CONF_GENERATE_INTEGRATIONS,
     CONF_INCLUDE_CONFIG,
     CONF_INCLUDE_DIAGNOSTIC,
     CONF_INCLUDE_DISABLED,
@@ -64,6 +66,7 @@ from .const import (
     KIND_DEVICE,
     KIND_ENTITY,
     KIND_FOLDERS,
+    KIND_INTEGRATION,
     SYNC_DEBOUNCE,
 )
 from .templates import (
@@ -150,6 +153,50 @@ def _prefill_key(key: DocKey) -> str:
 
 #: The target of a wikilink: `[[target]]`, `[[target|label]]`, `[[target#heading]]`.
 _WIKILINK = re.compile(r"\[\[([^\]|#^]+)")
+
+#: Anything shaped like an entity ID, tried at every word boundary so that
+#: `states.sensor.outside.state` still yields `sensor.outside`.
+_ENTITY_ID_LIKE = re.compile(r"(?=\b([a-z_][a-z0-9_]*\.[a-z0-9_]+))")
+
+#: Kinds of generated note, as written to `ha_type`.
+_KINDS = (KIND_ENTITY, KIND_DEVICE, KIND_AREA, KIND_INTEGRATION)
+
+
+def _mentioned_entities(value: Any, known: set[str]) -> set[str]:
+    """Collect the known entity IDs mentioned anywhere in a piece of configuration.
+
+    Strings are searched rather than compared, so an entity read inside a template
+    counts. Template objects are searched through their source.
+    """
+    found: set[str] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if "." in item:
+                found.update(m for m in _ENTITY_ID_LIKE.findall(item) if m in known)
+        elif isinstance(item, Mapping):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            stack.extend(item)
+        elif isinstance(source := getattr(item, "template", None), str):
+            stack.append(source)
+    return found
+
+
+def _named_entities(attributes: Mapping[str, Any], known: set[str]) -> set[str]:
+    """Collect the entity IDs a state attribute holds as a value or list of values.
+
+    Group members, a zone's persons, a power sensor's source. Only exact values count:
+    attributes also hold free text, which isn't a reference.
+    """
+    found: set[str] = set()
+    for value in attributes.values():
+        for item in value if isinstance(value, (list, tuple)) else (value,):
+            if isinstance(item, str) and item in known:
+                found.add(item)
+    return found
 
 
 class LockedFolderError(VaultError):
@@ -303,6 +350,10 @@ class NotesVault:
         #: Display names of integrations and entity domains ("air_quality" is
         #: "Air Quality"), used for readable tags. Filled before each sync.
         self._integration_names: dict[str, str] = {}
+        #: Integrations whose config entries describe helpers built from other
+        #: entities (groups, min/max, utility meters), whose options are worth
+        #: reading for the entities they use.
+        self._helper_integrations: set[str] = set()
 
     # -- Lifecycle -----------------------------------------------------------------
 
@@ -387,6 +438,8 @@ class NotesVault:
         for domain, integration in found.items():
             if isinstance(integration, Integration):
                 self._integration_names[domain] = integration.name
+                if integration.integration_type == "helper":
+                    self._helper_integrations.add(domain)
 
     def _folder(self, kind: str, domain: str | None = None) -> str:
         """Return the generated folder for a kind of note.
@@ -405,7 +458,9 @@ class NotesVault:
         }
 
     @callback
-    def _logic_details(self, domain: str, entity_id: str) -> dict[str, Any]:
+    def _logic_details(
+        self, domain: str, entity_id: str, known: set[str]
+    ) -> dict[str, Any]:
         """Describe an automation, script or scene: what it's for and what it touches.
 
         The referenced entities, devices and areas become links, so in Obsidian a
@@ -439,6 +494,10 @@ class NotesVault:
             component = None
         entity = component.get_entity(entity_id) if component else None
         config = getattr(entity, "raw_config", None) or {}
+        # Home Assistant's own lists leave out entities only read inside templates.
+        details["entities"] = sorted(
+            {*details["entities"], *_mentioned_entities(config, known)} - {entity_id}
+        )
         details["description"] = config.get("description") or None
         details["mode"] = config.get("mode")
         return details
@@ -615,12 +674,118 @@ class NotesVault:
             doc.managed["unit"] = state.attributes.get("unit_of_measurement")
             docs[doc.key] = doc
 
+        known = {d.managed["entity_id"] for d in docs.values() if d.kind == KIND_ENTITY}
         for doc in docs.values():
             if doc.kind == KIND_ENTITY and doc.managed["domain"] in DOMAIN_FOLDERS:
                 doc.managed.update(
-                    self._logic_details(doc.managed["domain"], doc.managed["entity_id"])
+                    self._logic_details(
+                        doc.managed["domain"], doc.managed["entity_id"], known
+                    )
                 )
+        self._add_references(docs, known)
+        self._add_integrations(docs)
         return docs
+
+    @callback
+    def _add_references(self, docs: dict[DocKey, Doc], known: set[str]) -> None:
+        """Link each entity to the entities it's built from or reads.
+
+        A group to its members, a template sensor to what its template reads, a
+        utility meter to its source. Without these, helpers are islands in the graph.
+        """
+        ent_reg = er.async_get(self.hass)
+        # Template entities keep their configuration, templates included, on the
+        # entity. There's no public accessor, so this reads it defensively.
+        configs: dict[str, Any] = {}
+        for platform in async_get_platforms(self.hass, "template"):
+            for entity_id, entity in platform.entities.items():
+                if (config := getattr(entity, "_config", None)) is not None:
+                    configs[entity_id] = config
+        for doc in docs.values():
+            if doc.kind != KIND_ENTITY:
+                continue
+            entity_id = doc.managed["entity_id"]
+            found = set(doc.managed.get("entities") or [])
+            if state := self.hass.states.get(entity_id):
+                found |= _named_entities(state.attributes, known)
+            if entity_id in configs:
+                found |= _mentioned_entities(configs[entity_id], known)
+            entry = ent_reg.async_get(entity_id)
+            if (
+                entry
+                and entry.config_entry_id
+                and entry.platform in self._helper_integrations
+                and (
+                    config_entry := self.hass.config_entries.async_get_entry(
+                        entry.config_entry_id
+                    )
+                )
+            ):
+                found |= _mentioned_entities(
+                    [config_entry.options, config_entry.data], known
+                )
+            found.discard(entity_id)
+            if found:
+                doc.managed["entities"] = sorted(found)
+
+    @callback
+    def _add_integrations(self, docs: dict[DocKey, Doc]) -> None:
+        """Give each integration with devices, or entities without one, a note.
+
+        Most devices hang off an area, but plenty never get one: HACS repositories,
+        add-ons, network clients, service devices. The integration's note is where
+        they meet, the way they do on its page in Home Assistant. Entities of a device
+        reach it through the device, so it doesn't list every entity it provides.
+        """
+        opts = self.options
+        exclude = set(opts[CONF_EXCLUDE_INTEGRATIONS])
+        wanted_child: dict[str, bool] = {}
+        for doc in list(docs.values()):
+            for domain in self._integration_parents(doc):
+                wanted_child[domain] = wanted_child.get(domain, False) or doc.wanted
+        for domain, has_wanted in wanted_child.items():
+            name = self._integration_name(domain)
+            doc = Doc(
+                kind=KIND_INTEGRATION,
+                ha_id=domain,
+                name=name,
+                folder=self._folder(KIND_INTEGRATION),
+                stem=safe_name(name),
+                wanted=bool(
+                    opts[CONF_GENERATE_INTEGRATIONS]
+                    and has_wanted
+                    and domain not in exclude
+                ),
+                aliases=[name],
+                tags=[f"{TAG_ROOT}/Integration"],
+            )
+            doc.managed = {
+                "ha_type": KIND_INTEGRATION,
+                "ha_id": domain,
+                "domain": domain,
+                "name": name,
+                "ha_url": self._url(f"/config/integrations/integration/{domain}"),
+            }
+            docs[doc.key] = doc
+
+    @staticmethod
+    def _integration_parents(doc: Doc) -> list[str]:
+        """Return the integrations whose note should list this one.
+
+        Devices, and entities without a device. Automations, scripts and scenes have
+        folders of their own and are linked through what they touch.
+        """
+        m = doc.managed
+        if doc.kind == KIND_DEVICE:
+            return list(m.get("integration") or [])
+        if (
+            doc.kind == KIND_ENTITY
+            and not m.get("device")
+            and m.get("integration")
+            and m["domain"] not in DOMAIN_FOLDERS
+        ):
+            return [m["integration"]]
+        return []
 
     def _entity_doc(
         self, *, ha_id: str, entity_id: str, name: str, wanted: bool
@@ -660,7 +825,7 @@ class NotesVault:
             except (OSError, VaultError):
                 continue
             kind, ha_id = fm.get("ha_type"), fm.get("ha_id")
-            if kind in (KIND_ENTITY, KIND_DEVICE, KIND_AREA) and isinstance(ha_id, str):
+            if kind in _KINDS and isinstance(ha_id, str):
                 key = (kind, ha_id)
                 # Two files claiming one object: keep the one in the generated folder.
                 if key in index and index[key].startswith(self._folder(kind) + "/"):
@@ -711,8 +876,15 @@ class NotesVault:
 
         devices_by_area: dict[str, list[str]] = {}
         entities_by_device: dict[str, list[str]] = {}
+        by_integration: dict[str, dict[str, list[str]]] = {}
         for doc in docs.values():
             m = doc.managed
+            if doc.key in paths:
+                for domain in self._integration_parents(doc):
+                    bucket = by_integration.setdefault(domain, {})
+                    bucket.setdefault(doc.kind, []).append(
+                        wikilink(paths[doc.key], doc.name)
+                    )
             if doc.kind == KIND_ENTITY:
                 device_id = m.get("device")
                 m["device"] = link(KIND_DEVICE, device_id)
@@ -745,8 +917,10 @@ class NotesVault:
 
         for doc in docs.values():
             m = doc.managed
-            if doc.kind == KIND_ENTITY and m["domain"] in DOMAIN_FOLDERS:
-                m["entities"] = links(KIND_ENTITY, m.get("entities") or [])
+            if doc.kind != KIND_ENTITY:
+                continue
+            m["entities"] = links(KIND_ENTITY, m.get("entities") or [])
+            if m["domain"] in DOMAIN_FOLDERS:
                 m["devices"] = links(KIND_DEVICE, m.get("devices") or [])
                 m["areas"] = links(KIND_AREA, m.get("areas") or [])
         for doc in docs.values():
@@ -754,6 +928,10 @@ class NotesVault:
                 doc.managed["entities"] = sorted(entities_by_device.get(doc.ha_id, []))
             elif doc.kind == KIND_AREA:
                 doc.managed["devices"] = sorted(devices_by_area.get(doc.ha_id, []))
+            elif doc.kind == KIND_INTEGRATION:
+                bucket = by_integration.get(doc.ha_id, {})
+                doc.managed["devices"] = sorted(bucket.get(KIND_DEVICE, []))
+                doc.managed["entities"] = sorted(bucket.get(KIND_ENTITY, []))
 
     def _read_existing(self, path: str) -> tuple[Note | None, float | None]:
         try:
@@ -1371,6 +1549,7 @@ class NotesVault:
         order = [
             KIND_FOLDERS[KIND_AREA],
             KIND_FOLDERS[KIND_DEVICE],
+            KIND_FOLDERS[KIND_INTEGRATION],
             *DOMAIN_FOLDERS.values(),
             KIND_FOLDERS[KIND_ENTITY],
         ]
@@ -1552,8 +1731,10 @@ class NotesVault:
                 data["entity_id"] = entry.entity_id if entry else ha_id
             elif kind == KIND_DEVICE:
                 data["device_id"] = ha_id
-            else:
+            elif kind == KIND_AREA:
                 data["area_id"] = ha_id
+            else:
+                data["integration"] = ha_id
         self.hass.bus.async_fire(EVENT_NOTE_UPDATED, data)
         self._schedule_index()
 
@@ -1602,7 +1783,7 @@ class NotesVault:
         except (OSError, VaultError):
             return
         kind, ha_id = fm.get("ha_type"), fm.get("ha_id")
-        if kind in (KIND_ENTITY, KIND_DEVICE, KIND_AREA) and isinstance(ha_id, str):
+        if kind in _KINDS and isinstance(ha_id, str):
             self.index.setdefault((kind, ha_id), path)
 
 

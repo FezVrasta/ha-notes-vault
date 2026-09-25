@@ -24,12 +24,13 @@
     "step": {
       "init": {
         "title": "Generated notes",
-        "description": "Every entity, device and area can get its own note, so you can link to it from Obsidian. Filters only stop empty notes from being generated: anything you've written a note on keeps its file.",
+        "description": "Every entity, device, area and integration can get its own note, so you can link to it from Obsidian. Filters only stop empty notes from being generated: anything you've written a note on keeps its file.",
         "data": {
           "base_folder": "Folder for generated notes",
           "generate_entities": "Generate entity notes",
           "generate_devices": "Generate device notes",
           "generate_areas": "Generate area notes",
+          "generate_integrations": "Generate integration notes",
           "include_diagnostic": "Include diagnostic entities",
           "include_config": "Include configuration entities",
           "include_hidden": "Include hidden entities",
@@ -42,7 +43,8 @@
           "webdav": "Serve the vault over WebDAV"
         },
         "data_description": {
-          "base_folder": "Inside the vault. Leave empty to put the Entities, Devices and Areas folders at the top level.",
+          "base_folder": "Inside the vault. Leave empty to put the Entities, Devices, Areas and Integrations folders at the top level.",
+          "generate_integrations": "A note per integration, linking its devices and the entities that have no device, so things without an area aren't left on their own in the graph.",
           "webdav": "Needed for the remotely-save plugin in Obsidian. Clients sign in with a long-lived access token of an administrator."
         }
       }
