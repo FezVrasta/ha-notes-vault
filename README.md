@@ -79,7 +79,24 @@ Any MCP server for Home Assistant that can call actions can use these. Nothing t
 
 While a note is empty, `get_note` also returns the template that fits it, so an agent writing a note for the first time follows the same structure you would. `get_note`, `get_template` and `list_templates` are available to every user. The rest need an administrator, because the vault can hold anything, not just notes on entities.
 
-Agents don't take notes unless they're told to. I put something like this in the assistant's instructions (a `CLAUDE.md`, a project prompt, a custom GPT's instructions):
+Agents don't take notes unless they're told to, so the repository ships a skill that tells them: read the note before touching a device, search before asking you, write down what they learn, start a first note from its template, and stay away from the traps (like `write_file` replacing a generated note's frontmatter).
+
+**Claude Code:**
+
+```bash
+claude plugin marketplace add FezVrasta/ha-notes-vault
+claude plugin install ha-notes-vault@ha-notes-vault
+```
+
+**Claude.ai and Claude Desktop:** download [`ha-notes-vault-skill.zip`](https://github.com/FezVrasta/ha-notes-vault/releases/latest/download/ha-notes-vault-skill.zip) and upload it in **Settings → Capabilities → Skills**.
+
+**Cursor, Codex, OpenCode, Gemini CLI and other agents that read skills:**
+
+```bash
+npx skills add FezVrasta/ha-notes-vault
+```
+
+The skill is in [`skills/ha-notes-vault`](skills/ha-notes-vault/SKILL.md) if you want to read it or adapt it. For an assistant without skills, put something like this in its instructions (a `CLAUDE.md`, a project prompt, a custom GPT's instructions):
 
 ```markdown
 Home Assistant has a notes vault, through the notes_vault actions.
@@ -309,7 +326,7 @@ Filters only stop *empty* notes from being generated. Anything you've written a 
 
 ## Limitations
 
-- **Agents only take notes if you ask them to.** The actions are there, but no assistant calls them on its own. Put it in their instructions, as in [Notes for your AI](#notes-for-your-ai).
+- **Agents only take notes if you ask them to.** The actions are there, but no assistant calls them on its own. Install the skill or put it in their instructions, as in [Notes for your AI](#notes-for-your-ai).
 - **Two-way sync can conflict.** If you edit a note in Obsidian while Home Assistant regenerates its frontmatter (after a rename, say), remotely-save sees both sides changed and applies its conflict rule. Home Assistant only writes a note when its metadata really changes, so this is rare, but it can happen.
 - **Deleting a generated note doesn't stick.** It comes back, with its template, at the next sync. Exclude the entity or device in the options instead.
 - **Notes carry metadata, not live state.** Frontmatter holds names, IDs and relationships, never the current state, so the files don't churn with every sensor update.

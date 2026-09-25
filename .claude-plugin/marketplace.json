@@ -1,0 +1,23 @@
+{
+  "name": "ha-notes-vault",
+  "description": "The Notes Vault skill for Home Assistant, so AI assistants use the vault the way it's meant to be used.",
+  "owner": {
+    "name": "Federico Zivolo",
+    "url": "https://github.com/FezVrasta"
+  },
+  "plugins": [
+    {
+      "name": "ha-notes-vault",
+      "source": "./",
+      "description": "Teaches Claude to read and write the Home Assistant Notes Vault: check a device's note before touching it, write down what it learns afterwards.",
+      "homepage": "https://github.com/FezVrasta/ha-notes-vault",
+      "license": "MIT",
+      "keywords": [
+        "home-assistant",
+        "notes",
+        "obsidian",
+        "memory"
+      ]
+    }
+  ]
+}

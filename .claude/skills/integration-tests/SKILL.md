@@ -5,6 +5,8 @@ description: >-
   testing. Use when adding or fixing tests, when a test needs a Home Assistant fixture,
   when the suite fails to import, or when deciding whether something needs a test at
   all.
+metadata:
+  internal: true
 ---
 
 # Testing a custom integration

@@ -5,6 +5,8 @@ description: >-
   layout, the badges, the voice, and what belongs above the fold. Use when writing or
   rewriting README.md, adding screenshots, or drafting release notes for one of these
   repositories.
+metadata:
+  internal: true
 ---
 
 # README style

@@ -50,3 +50,26 @@ jobs:
               )
           print(f"{manifest_path} and the tag agree on {version}")
           PY
+
+  skill:
+    name: Attach the AI skill
+    # Claude.ai and Claude Desktop install a skill from a zip upload, so every release
+    # carries one. hacs.json has no zip_release, so HACS ignores the extra asset.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Zip and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd skills
+          zip -r ../ha-notes-vault-skill.zip ha-notes-vault
+          cd ..
+          gh release upload "$TAG" ha-notes-vault-skill.zip --clobber

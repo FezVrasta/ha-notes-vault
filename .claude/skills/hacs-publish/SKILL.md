@@ -5,6 +5,8 @@ description: >-
   requirements the HACS action checks, submitting to the HACS default list, and the
   route to upstreaming into Home Assistant core. Use when the HACS CI job fails, when
   asked how users install this, or when considering listing it publicly.
+metadata:
+  internal: true
 ---
 
 # Publishing

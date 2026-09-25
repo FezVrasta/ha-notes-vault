@@ -5,6 +5,8 @@ description: >-
   2026.3, the filenames and sizes Home Assistant recognises, rendering them from SVG, and
   the librsvg quirks that produce visible seams. Use when adding or changing an
   integration's icon, or when the integration shows the generic puzzle-piece.
+metadata:
+  internal: true
 ---
 
 # Brand assets

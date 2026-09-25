@@ -6,6 +6,8 @@ description: >-
   patterns, config flow rules, services, and the deprecated APIs to avoid. Read before
   writing or reviewing any file under custom_components/, and when asked why an entity
   is named oddly, why history was lost, or whether something is the modern API.
+metadata:
+  internal: true
 ---
 
 # Home Assistant integration conventions

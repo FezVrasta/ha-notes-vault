@@ -1,0 +1,12 @@
+{
+  "name": "ha-notes-vault",
+  "description": "Teaches Claude to read and write the Home Assistant Notes Vault: check a device's note before touching it, write down what it learns afterwards.",
+  "author": {
+    "name": "Federico Zivolo",
+    "url": "https://github.com/FezVrasta"
+  },
+  "homepage": "https://github.com/FezVrasta/ha-notes-vault",
+  "repository": "https://github.com/FezVrasta/ha-notes-vault",
+  "license": "MIT",
+  "keywords": ["home-assistant", "notes", "obsidian", "memory"]
+}

@@ -5,6 +5,8 @@ description: >-
   "release", "cut a release", "ship a version", or publish a new vX.Y.Z. Covers the
   version scheme, the fact that manifest.json is bumped automatically by CI and never by
   hand, the commit and release-notes conventions, and how to verify the release landed.
+metadata:
+  internal: true
 ---
 
 # Cutting a release

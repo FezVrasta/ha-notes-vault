@@ -6,6 +6,8 @@ description: >-
   integration", "bootstrap this", or "set up the scaffold". Covers running
   scripts/bootstrap, choosing integration_type and iot_class, what to replace, and how
   to know the scaffold still works afterwards.
+metadata:
+  internal: true
 ---
 
 # Starting a new integration from the template
