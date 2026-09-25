@@ -106,6 +106,7 @@ anything else              the user's own notes (Maintenance/, Projects/, ...)
 The folder name `Home Assistant` is the default and can be changed in the integration's options; take real paths from `get_note`, `search` and `list_files` rather than assuming it.
 
 - **`Index.md`** is the quickest way to see what's actually been written. It's regenerated; never edit it.
+- **Deletes and replacements go to `.trash/`** for 30 days, so a mistake can be undone: `list_files` with `folder: .trash`, then `read_file` and write it back. It's still no excuse to replace a note you haven't read first.
 - **Generated notes can't be deleted for good.** They come back, with their template, at the next sync. The generated folder itself can't be deleted at all.
 - A note with `ha_removed: true` in its frontmatter is about something that no longer exists in Home Assistant. Its content was kept on purpose. Leave it unless the user asks.
 - **Frontmatter keys Home Assistant writes are its own.** Don't edit them; they're rewritten. Keys the user added are kept.
