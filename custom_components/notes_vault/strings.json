@@ -40,12 +40,14 @@
           "exclude_labels": "Skip anything with these labels",
           "exclude_devices": "Skip these devices and their entities",
           "exclude_entities": "Skip these entities",
-          "webdav": "Serve the vault over WebDAV"
+          "webdav": "Serve the vault over WebDAV",
+          "include_service_devices": "Include service devices"
         },
         "data_description": {
           "base_folder": "Inside the vault. Leave empty to put the Entities, Devices, Areas and Integrations folders at the top level.",
           "generate_integrations": "A note per integration, linking its devices and the entities that have no device, so things without an area aren't left on their own in the graph.",
-          "webdav": "Needed for the remotely-save plugin in Obsidian. Clients sign in with a long-lived access token of an administrator."
+          "webdav": "Needed for the remotely-save plugin in Obsidian. Clients sign in with a long-lived access token of an administrator.",
+          "include_service_devices": "Devices that integrations and add-ons register for themselves (Sun, Backup, add-ons, cloud services). They aren't things in the house, and each integration already has a note. Their entities are linked from the integration's note either way."
         }
       }
     },

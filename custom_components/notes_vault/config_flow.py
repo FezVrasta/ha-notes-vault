@@ -43,6 +43,7 @@ from .const import (
     CONF_INCLUDE_DIAGNOSTIC,
     CONF_INCLUDE_DISABLED,
     CONF_INCLUDE_HIDDEN,
+    CONF_INCLUDE_SERVICE_DEVICES,
     CONF_WEBDAV,
     DEFAULT_FOLDER,
     DEFAULT_OPTIONS,
@@ -153,6 +154,7 @@ class NotesVaultOptionsFlow(OptionsFlow):
                 vol.Required(CONF_INCLUDE_CONFIG): BooleanSelector(),
                 vol.Required(CONF_INCLUDE_HIDDEN): BooleanSelector(),
                 vol.Required(CONF_INCLUDE_DISABLED): BooleanSelector(),
+                vol.Required(CONF_INCLUDE_SERVICE_DEVICES): BooleanSelector(),
                 vol.Optional(CONF_EXCLUDE_DOMAINS): multi(domains),
                 vol.Optional(CONF_EXCLUDE_INTEGRATIONS): multi(integrations),
                 vol.Optional(CONF_EXCLUDE_LABELS): LabelSelector(

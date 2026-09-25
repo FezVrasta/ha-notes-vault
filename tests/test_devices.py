@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.notes_vault.manager import NotesVault
@@ -97,3 +98,76 @@ async def test_colliding_names_use_something_readable(
     assert "Relay (Garage)" in names or "Relay (Plus 1)" in names
     assert "Plug S" in names
     assert not any(unnamed.id[:6] in n for n in names)
+
+
+async def test_service_devices_are_skipped(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A service device gets no note; its entity hangs off the integration."""
+    entry = _entry(hass, "sun")
+    sun = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("sun", "1")},
+        name="Sun",
+        entry_type=dr.DeviceEntryType.SERVICE,
+    )
+    dawn = er.async_get(hass).async_get_or_create(
+        "sensor",
+        "sun",
+        "dawn",
+        device_id=sun.id,
+        config_entry=entry,
+        suggested_object_id="sun_next_dawn",
+    )
+    hass.states.async_set(dawn.entity_id, "06:30")
+    await manager.async_sync()
+
+    assert not (vault_dir / f"{DEVICES}/Sun.md").exists()
+    note = parse_note(
+        (vault_dir / "Home Assistant/Entities/sensor.sun_next_dawn.md").read_text()
+    ).frontmatter
+    assert "device" not in note
+    integration = parse_note(
+        (vault_dir / "Home Assistant/Integrations/Sun.md").read_text()
+    ).frontmatter
+    assert any("sensor.sun_next_dawn" in link for link in integration["entities"])
+
+
+async def test_automation_links_split_device_note(
+    hass: HomeAssistant, manager: NotesVault, vault_dir: Path
+) -> None:
+    """An automation targeting one part of a split device links its one note."""
+    reg = dr.async_get(hass)
+    esphome, bluetooth = _entry(hass, "esphome"), _entry(hass, "bluetooth")
+    main = reg.async_get_or_create(
+        config_entry_id=esphome.entry_id, identifiers={("esphome", "p")}, name="Proxy"
+    )
+    part = reg.async_get_or_create(
+        config_entry_id=bluetooth.entry_id,
+        identifiers={("bluetooth", "p")},
+        name="Proxy",
+    )
+    for device in (main, part):
+        reg.devices[device.id] = attr.evolve(device, composite_device_id="old")
+    assert await async_setup_component(
+        hass,
+        "script",
+        {
+            "script": {
+                "restart_proxy": {
+                    "sequence": [
+                        {
+                            "action": "button.press",
+                            "target": {"device_id": part.id},
+                        }
+                    ]
+                }
+            }
+        },
+    )
+    await hass.async_block_till_done()
+    await manager.async_sync()
+    script = parse_note(
+        (vault_dir / "Home Assistant/Scripts/script.restart_proxy.md").read_text()
+    ).frontmatter
+    assert script["devices"] == [f"[[{DEVICES}/Proxy|Proxy]]"]

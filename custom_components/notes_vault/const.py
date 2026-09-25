@@ -22,6 +22,7 @@ CONF_INCLUDE_HIDDEN: Final = "include_hidden"
 CONF_INCLUDE_DISABLED: Final = "include_disabled"
 CONF_INCLUDE_DIAGNOSTIC: Final = "include_diagnostic"
 CONF_INCLUDE_CONFIG: Final = "include_config"
+CONF_INCLUDE_SERVICE_DEVICES: Final = "include_service_devices"
 CONF_EXCLUDE_DOMAINS: Final = "exclude_domains"
 CONF_EXCLUDE_INTEGRATIONS: Final = "exclude_integrations"
 CONF_EXCLUDE_LABELS: Final = "exclude_labels"
@@ -39,6 +40,7 @@ DEFAULT_OPTIONS: Final = {
     CONF_INCLUDE_DISABLED: False,
     CONF_INCLUDE_DIAGNOSTIC: False,
     CONF_INCLUDE_CONFIG: False,
+    CONF_INCLUDE_SERVICE_DEVICES: False,
     # Feeds (earthquakes, fires, weather alerts) create and drop these by the minute.
     # A note per event is noise, and each one would be one more file to sync.
     CONF_EXCLUDE_DOMAINS: ["geo_location"],

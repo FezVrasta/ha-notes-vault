@@ -59,6 +59,7 @@ from .const import (
     CONF_INCLUDE_DIAGNOSTIC,
     CONF_INCLUDE_DISABLED,
     CONF_INCLUDE_HIDDEN,
+    CONF_INCLUDE_SERVICE_DEVICES,
     DEFAULT_OPTIONS,
     DOMAIN,
     DOMAIN_FOLDERS,
@@ -389,6 +390,7 @@ class NotesVault:
         #: and back to the device whose page represents it.
         self._device_group: dict[str, str] = {}
         self._group_primary: dict[str, str] = {}
+        self._service_groups: set[str] = set()
         #: Display name of every generated note, by path, as of the last sync. The
         #: panel asks for these on every click; rebuilding them means walking every
         #: registry.
@@ -611,6 +613,7 @@ class NotesVault:
             groups.setdefault(group, []).append(device)
         self._device_group = {d.id: key for key, ds in groups.items() for d in ds}
         self._group_primary = {}
+        self._service_groups: set[str] = set()
 
         for group, members in groups.items():
             primary = _primary_device(members)
@@ -642,8 +645,14 @@ class NotesVault:
                 or primary.manufacturer
                 or (f"{names[0]} device" if names else group)
             )
+            # Integrations and add-ons register "service" devices: software, not
+            # things in the house, and the integration has a note of its own.
+            service = all(m.entry_type is dr.DeviceEntryType.SERVICE for m in members)
+            if service and not opts[CONF_INCLUDE_SERVICE_DEVICES]:
+                self._service_groups.add(group)
             wanted = (
                 opts[CONF_GENERATE_DEVICES]
+                and group not in self._service_groups
                 and not {m.id for m in members} & exclude_devices
                 and not (labels & exclude_labels)
                 and not (integrations and set(integrations) <= exclude_integrations)
@@ -740,7 +749,12 @@ class NotesVault:
             doc.managed.update(
                 {
                     "integration": entry.platform,
-                    "device": self._device_group.get(entry.device_id or ""),
+                    # An entity of a skipped service device hangs off its
+                    # integration's note instead.
+                    "device": None
+                    if (group := self._device_group.get(entry.device_id or ""))
+                    in self._service_groups
+                    else group,
                     "area": entry.area_id or (device.area_id if device else None),
                     "labels": label_names(entry.labels),
                     "device_class": entry.device_class or entry.original_device_class,
@@ -1009,11 +1023,13 @@ class NotesVault:
         }
 
         def links(kind: str, ids: list[str]) -> list[str]:
-            keys = (
-                [by_entity_id.get(i) for i in ids]
-                if kind == KIND_ENTITY
-                else [(kind, i) for i in ids]
-            )
+            if kind == KIND_ENTITY:
+                keys = [by_entity_id.get(i) for i in ids]
+            elif kind == KIND_DEVICE:
+                # Automations and scripts name a part of a split device.
+                keys = [(kind, self._device_group.get(i, i)) for i in ids]
+            else:
+                keys = [(kind, i) for i in ids]
             return sorted(
                 wikilink(paths[k], docs[k].name) for k in keys if k and k in paths
             )
