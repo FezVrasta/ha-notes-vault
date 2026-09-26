@@ -338,6 +338,11 @@ class NotesVaultNote extends HTMLElement {
         view.focus();
         view.dispatch({ selection: { anchor: view.state.doc.length } });
       });
+      // Home Assistant's keyboard shortcuts ("e" for the entity search, "c" for
+      // commands) only stand down for inputs and textareas, and can't see the
+      // editor inside this shadow root. Keys typed into it stop here, after the
+      // editor has handled them.
+      host.addEventListener("keydown", (ev) => ev.stopPropagation());
       this._editorHost = host;
       loadEditor()
         .then((mod) => {

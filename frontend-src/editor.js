@@ -399,19 +399,41 @@ const wikilinkCompletion = (listNotes) => async (context) => {
   const before = context.matchBefore(/\[\[[^\]|#\n]*$/);
   if (!before) return null;
   const notes = (await listNotes?.()) || [];
-  const closed = context.state.sliceDoc(context.pos, context.pos + 2) === "]]";
+  // The typed text, matched as typed: fuzzy matching offers every note whose
+  // name happens to contain the same letters in order.
+  const query = before.text.slice(2).toLowerCase();
+  const matches = notes
+    .map((note) => {
+      const name = (note.label || note.target).toLowerCase();
+      const rank = name.startsWith(query) ? 0 : name.includes(query) ? 1 : note.target.toLowerCase().includes(query) ? 2 : -1;
+      return { note, rank };
+    })
+    .filter(({ rank }) => rank >= 0)
+    .sort((a, b) => a.rank - b.rank || (a.note.label || "").localeCompare(b.note.label || ""))
+    .slice(0, 50)
+    .map(({ note }) => note);
   return {
     from: before.from + 2,
-    options: notes.map((note) => {
+    filter: false,
+    options: matches.map((note) => {
       const target = note.target;
       const alias = note.label && note.label !== target ? `|${note.label}` : "";
       return {
         label: note.label || target,
         detail: note.detail,
-        apply: `${target}${alias}${closed ? "" : "]]"}`,
+        // Typing [[ may already have closed the link with ]]. Either way the link
+        // ends up closed and the cursor after it, ready to keep writing.
+        apply: (view, _completion, from, to) => {
+          const insert = `${target}${alias}]]`;
+          const end = view.state.sliceDoc(to, to + 2) === "]]" ? to + 2 : to;
+          view.dispatch({
+            changes: { from, to: end, insert },
+            selection: { anchor: from + insert.length },
+            userEvent: "input.complete",
+          });
+        },
       };
     }),
-    validFor: /^[^\]|#\n]*$/,
   };
 };
 
