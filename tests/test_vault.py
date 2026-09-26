@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -120,3 +123,34 @@ def test_rewrite_links(vault: Vault) -> None:
 def test_plain_text(line: str, expected: str) -> None:
     """Snippets read like the rendered note, not its source."""
     assert plain_text(line) == expected
+
+
+def test_listing_skips_files_that_vanish(tmp_path: Path) -> None:
+    """A temporary file renamed away mid-listing is skipped, not an error."""
+    vault = Vault(tmp_path)
+    vault.ensure()
+    vault.write_text("note.md", "x")
+    (tmp_path / ".~gone.tmp").write_text("")
+    real_scandir = os.scandir
+
+    class Vanished:
+        def __init__(self, entry: os.DirEntry) -> None:
+            self._entry = entry
+            self.name = entry.name
+            self.path = entry.path
+
+        def stat(self):
+            if self.name == ".~gone.tmp":
+                raise FileNotFoundError(self.path)
+            return self._entry.stat()
+
+        def is_dir(self):
+            return self._entry.is_dir()
+
+    @contextmanager
+    def scandir(path):
+        with real_scandir(path) as it:
+            yield [Vanished(e) for e in it]
+
+    with patch("custom_components.notes_vault.vault.os.scandir", scandir):
+        assert [e.path for e in vault.list_dir()] == ["note.md"]

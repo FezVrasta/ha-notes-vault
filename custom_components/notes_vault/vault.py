@@ -211,8 +211,14 @@ class Vault:
         entries: list[FileInfo] = []
         with os.scandir(full) as it:
             for entry in it:
-                st = entry.stat()
-                is_dir = entry.is_dir()
+                # Every write goes through a temporary file renamed into place, so
+                # one can vanish between the listing and the stat. It was never a
+                # note anyway.
+                try:
+                    st = entry.stat()
+                    is_dir = entry.is_dir()
+                except FileNotFoundError:
+                    continue
                 entries.append(
                     FileInfo(
                         f"{base}/{entry.name}" if base else entry.name,
