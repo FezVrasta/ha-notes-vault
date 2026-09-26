@@ -133,6 +133,15 @@ const STYLE = `
   }
   :host([variant="panel"]) .editor { min-height: 50vh; }
   .status { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); }
+  [hidden] { display: none !important; }
+  /* A long note is cut short in a card; the whole of it opens in a dialog. */
+  .clamp { max-height: 18em; overflow: hidden; }
+  .clamp.clamped {
+    cursor: pointer;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 4em), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 4em), transparent);
+  }
+  .dialog-body { display: flex; flex-direction: column; gap: 16px; }
   .actions, .card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
   .card-actions .spacer, .actions .spacer { flex: 1; }
   ha-spinner { align-self: center; }
@@ -147,7 +156,8 @@ const MDI_CHECK = "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z";
 
 /**
  * The note editor. `setTarget({entity_id})`, `{device_id}`, `{area_id}` or `{path}`.
- * `variant` is `inline` (more-info dialog), `card` (pages and dashboards) or `panel`.
+ * `variant` is `inline` (more-info dialog), `card` (pages and dashboards), `panel`, or
+ * `dialog` (the whole note, opened from a card that cut it short).
  * Fires `notes-vault-open` with a path when a link to another note is followed in the
  * panel, and `notes-vault-changed` after a save or delete.
  */
@@ -558,7 +568,10 @@ class NotesVaultNote extends HTMLElement {
     const href = anchor?.getAttribute("href") || "";
     const action = ev.composedPath().find((el) => el.dataset?.action)?.dataset.action;
     const open = ev.composedPath().find((el) => el.dataset?.open)?.dataset.open;
-    if (href.startsWith("#notes-vault-entity=")) {
+    const clamped = !anchor && ev.composedPath().some((el) => el.classList?.contains("clamped"));
+    if (clamped) {
+      this._showAll();
+    } else if (href.startsWith("#notes-vault-entity=")) {
       ev.preventDefault();
       ev.stopPropagation();
       this._fire("hass-more-info", { entityId: href.slice("#notes-vault-entity=".length) });
@@ -598,6 +611,65 @@ class NotesVaultNote extends HTMLElement {
     return `<ha-dropdown class="template-menu" placement="top-start"><ha-button slot="trigger" size="s" appearance="plain" with-caret>Template</ha-button>${items}</ha-dropdown>`;
   }
 
+  /** Cut a long note short, and offer the rest, once it has rendered and been measured. */
+  _clamp() {
+    const box = this.shadowRoot.querySelector(".clamp");
+    if (!box) return;
+    const check = () => {
+      const over = box.scrollHeight > box.clientHeight + 4;
+      box.classList.toggle("clamped", over);
+      const button = this.shadowRoot.querySelector('[data-action="showAll"]');
+      if (button) button.hidden = !over;
+    };
+    // ha-markdown renders asynchronously, and images change the height later.
+    this._clampObserver = new ResizeObserver(check);
+    this._clampObserver.observe(box.firstElementChild);
+    check();
+  }
+
+  /** The whole note in Home Assistant's own dialog, a bottom sheet on a phone. */
+  _showAll() {
+    if (!customElements.get("ha-adaptive-dialog")) {
+      navigate(panelHref(this._state.path));
+      return;
+    }
+    const dialog = document.createElement("ha-adaptive-dialog");
+    dialog.headerTitle = this._state.frontmatter?.name || this.getAttribute("heading") || "Notes";
+    const note = document.createElement("notes-vault-note");
+    note.setAttribute("variant", "dialog");
+    dialog.appendChild(note);
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      window.removeEventListener("location-changed", close);
+      dialog.open = false;
+      setTimeout(() => dialog.remove(), 400);
+    };
+    // The dialog sits outside Home Assistant's tree, where the more-info dialog and
+    // the panel listen. Their events are sent on from here, and the dialog closes.
+    for (const type of ["hass-more-info", "notes-vault-open"]) {
+      dialog.addEventListener(type, (ev) => {
+        ev.stopPropagation();
+        close();
+        this._fire(type, ev.detail);
+      });
+    }
+    dialog.addEventListener("notes-vault-changed", (ev) => {
+      ev.stopPropagation();
+      this._load();
+    });
+    // Only the dialog's own: the template menu inside the note fires wa-hide too.
+    for (const type of ["wa-hide", "closed"]) {
+      dialog.addEventListener(type, (ev) => ev.target === dialog && close());
+    }
+    window.addEventListener("location-changed", close);
+    document.body.appendChild(dialog);
+    note.hass = this.hass;
+    note.setTarget(this._target);
+    dialog.open = true;
+  }
+
   _button(action, label, { appearance = "plain", variant, disabled = false } = {}) {
     return `<ha-button size="s" appearance="${appearance}" ${variant ? `variant="${variant}"` : ""} data-action="${action}" ${disabled ? "disabled" : ""}>${escapeHtml(label)}</ha-button>`;
   }
@@ -626,7 +698,8 @@ class NotesVaultNote extends HTMLElement {
     } else if (s.error) {
       body = `<ha-alert alert-type="error">${escapeHtml(s.error)}</ha-alert>`;
     } else if (s.note || (inPanel && s.template?.body)) {
-      body = `<ha-markdown breaks></ha-markdown>`;
+      const clamp = variant === "card" || variant === "inline";
+      body = clamp ? `<div class="clamp"><ha-markdown breaks></ha-markdown></div>` : `<ha-markdown breaks></ha-markdown>`;
     } else {
       body = `<span class="empty">No notes yet.</span>`;
     }
@@ -659,6 +732,10 @@ class NotesVaultNote extends HTMLElement {
       }
       const hasText = s.note || (inPanel && s.template?.body);
       if (menu) extra.push(menu);
+      // Shown once the note turns out not to fit (see _clamp).
+      if (!s.editing && (variant === "card" || variant === "inline")) {
+        extra.push(this._button("showAll", "Show all").replace("<ha-button", "<ha-button hidden"));
+      }
       const end = this._autosaves
         ? `<span class="status">${escapeHtml(this._statusText())}</span>`
         : this._button("edit", hasText ? "Edit" : "Add note");
@@ -666,8 +743,11 @@ class NotesVaultNote extends HTMLElement {
     }
 
     const content = `<div class="body">${path}${body}</div>`;
+    // On Home Assistant's own pages the cards around it are outlined whatever the
+    // theme says; a dashboard card follows the theme like any other.
+    const outlined = this.hasAttribute("outlined") ? " outlined" : "";
     const card = `
-      <ha-card header="${escapeHtml(title)}">
+      <ha-card${outlined} header="${escapeHtml(title)}">
         <div class="card-content">${content}</div>
         ${actions ? `<div class="card-actions">${actions}</div>` : ""}
       </ha-card>`;
@@ -690,8 +770,11 @@ class NotesVaultNote extends HTMLElement {
         </ha-card>`;
     }
 
+    this._clampObserver?.disconnect();
     this.shadowRoot.innerHTML =
-      variant === "inline"
+      variant === "dialog"
+        ? `<style>${STYLE}</style><div class="dialog-body">${content}${actions ? `<div class="actions">${actions}</div>` : ""}</div>`
+        : variant === "inline"
         ? `<style>${STYLE}</style>
            <ha-expansion-panel outlined expanded header="${escapeHtml(title)}">
              <div class="panel-body">${content}${actions ? `<div class="actions">${actions}</div>` : ""}</div>
@@ -704,6 +787,7 @@ class NotesVaultNote extends HTMLElement {
       // The panel shows a note as it is on disk, so an untouched template shows too.
       const text = s.note || (inPanel ? s.template?.body : "") || "";
       md.content = renderWikilinks(text, s.links, { inPanel, canBrowse: s.canEdit });
+      this._clamp();
     }
 
     if (s.editing && !s.plain) this._mountEditor();
@@ -1307,6 +1391,7 @@ const ensureNote = (container, before, target, variant, style) => {
   if (!note) {
     note = document.createElement("notes-vault-note");
     note.setAttribute("variant", variant);
+    if (variant === "card") note.setAttribute("outlined", "");
     if (style) note.setAttribute("style", style);
     if (before) container.insertBefore(note, before);
     else container.appendChild(note);
