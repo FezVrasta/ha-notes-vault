@@ -42,8 +42,8 @@ Notes Vault gives Home Assistant a notes vault, with a generated note for every 
 ## What you get
 
 <p align="center">
-  <img src="docs/images/panel.png" alt="The Notes panel in Home Assistant. On the left, the vault as a tree: the user's own Home folder with Electrical panel and Network, then the generated Areas. On the right, the Heat pump note with its location, purchase details, maintenance log and quirks, linking to the Ecobee thermostat, the outside temperature sensor and the energy contract, with a Go to device button and the notes that link to it underneath.">
-  <br><em>The Notes panel: every note in the vault, with the ones linking to it.</em>
+  <img src="docs/images/editor.webp" alt="Writing in the Notes panel. The Heat pump note is open, rendered like a document. A new line in its maintenance log is typed: after two square brackets a list suggests the Yearly maintenance note, and picking it turns it into a link. A task with a bold word is added below; once the cursor leaves the line it becomes a checkbox, which is then ticked and struck through, and the note shows Saved.">
+  <br><em>The Notes panel: Markdown renders as you write it, links complete as you type, and every change saves itself.</em>
 </p>
 
 <table>

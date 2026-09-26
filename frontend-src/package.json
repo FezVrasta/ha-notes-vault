@@ -4,7 +4,8 @@
   "description": "Source of the live-preview Markdown editor, built into custom_components/notes_vault/frontend/editor.js.",
   "type": "module",
   "scripts": {
-    "build": "esbuild editor.js --banner:js=\"/* Notes Vault editor. Bundles CodeMirror 6 and Lezer, MIT licensed, (c) Marijn Haverbeke and others. Source: frontend-src/. */\" --bundle --format=esm --minify --legal-comments=none --target=es2022 --outfile=../custom_components/notes_vault/frontend/editor.js"
+    "build": "esbuild editor.js --banner:js=\"/* Notes Vault editor. Bundles CodeMirror 6 and Lezer, MIT licensed, (c) Marijn Haverbeke and others. Source: frontend-src/. */\" --bundle --format=esm --minify --legal-comments=none --target=es2022 --outfile=../custom_components/notes_vault/frontend/editor.js",
+    "record-demo": "node record-demo.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
@@ -17,6 +18,7 @@
     "@lezer/markdown": "1.7.2"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "playwright-core": "1.63.0"
   }
 }
