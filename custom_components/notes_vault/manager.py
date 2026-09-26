@@ -1654,7 +1654,10 @@ class NotesVault:
         """
         async with self.lock:
             docs = self.build_docs()
-            if key not in docs:
+            # A note kept for something no longer described (a skipped HACS device,
+            # a removed entity) is still in the index and still readable, so it
+            # stays writable. Only creating a note needs a doc.
+            if key not in docs and key not in self.index:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN, translation_key="no_target"
                 )
@@ -1701,6 +1704,11 @@ class NotesVault:
         ):
             self.vault.keep_version(path)
         if note is None:
+            if key not in docs:
+                # Indexed, but the file is gone and nothing describes it any more.
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="no_target"
+                )
             # Create the file even if the filters exclude it: a note always wins.
             docs[key].wanted = True
             wanted = {k: d for k, d in docs.items() if d.wanted or k in self.index}

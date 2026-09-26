@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.notes_vault import manager as manager_module
 from custom_components.notes_vault.manager import NotesVault
 from custom_components.notes_vault.vault import parse_note
 
@@ -171,3 +172,33 @@ async def test_automation_links_split_device_note(
         (vault_dir / "Home Assistant/Scripts/script.restart_proxy.md").read_text()
     ).frontmatter
     assert script["devices"] == [f"[[{DEVICES}/Proxy|Proxy]]"]
+
+
+async def test_kept_note_on_skipped_device_is_writable(
+    hass: HomeAssistant,
+    manager: NotesVault,
+    vault_dir: Path,
+    monkeypatch,
+) -> None:
+    """A note kept for a device that is now skipped can still be edited.
+
+    Notes written before HACS repositories were skipped stay in the vault and
+    `get_note` still reads them, so `set_note` has to accept them too.
+    """
+    entry = _entry(hass, "hacs")
+    repo = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("hacs", "2")}, name="Alarmo"
+    )
+    monkeypatch.setattr(manager_module, "ALWAYS_SKIPPED_INTEGRATIONS", frozenset())
+    await manager.async_set_note(("device", repo.id), "Arms when both are out.")
+    monkeypatch.undo()
+    await manager.async_sync()
+
+    assert (await manager.async_get_note(("device", repo.id)))["note"] == (
+        "Arms when both are out."
+    )
+    await manager.async_set_note(("device", repo.id), "No siren.", append=True)
+
+    note = parse_note((vault_dir / f"{DEVICES}/Alarmo.md").read_text())
+    assert note.body.strip() == "Arms when both are out.\n\nNo siren."
+    assert note.frontmatter["ha_type"] == "device"
