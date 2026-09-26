@@ -25,6 +25,18 @@ Lint and format use the same configuration Home Assistant core does:
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
+## The editor
+
+The note editor is CodeMirror 6 with an Obsidian-style live preview. Its source is `frontend-src/editor.js`, and it's bundled into `custom_components/notes_vault/frontend/editor.js`, which is committed because HACS serves the repository as it is:
+
+```bash
+cd frontend-src
+npm ci
+npm run build
+```
+
+Commit the rebuilt bundle with the change. CI rebuilds it and fails if the two differ. Everything else in the frontend is `notes-vault.js`, plain JavaScript with no build step.
+
 ## Before opening a pull request
 
 - Tests pass, and new behaviour has a test. One test per way something has broken before

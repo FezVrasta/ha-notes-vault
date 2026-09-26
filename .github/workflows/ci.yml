@@ -54,6 +54,22 @@ jobs:
             diff -u "$dir/strings.json" "$dir/translations/en.json"
           done
 
+  editor:
+    name: Editor bundle matches its source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # HACS serves the repository as it is, so the built editor is committed. A
+      # change to frontend-src/ without a rebuild ships the old editor.
+      - run: npm ci
+        working-directory: frontend-src
+      - run: npm run build
+        working-directory: frontend-src
+      - run: git diff --exit-code custom_components/notes_vault/frontend/editor.js
+
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest

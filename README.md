@@ -59,6 +59,7 @@ Notes Vault gives Home Assistant a notes vault, with a generated note for every 
 
 - **A Notes panel** in the sidebar: the whole vault as a tree, with search, backlinks, and folders you can create, rename, move and delete. Administrators only, since the vault can hold anything.
 - **Notes where you need them:** in every entity's more-info dialog, on device and area pages, and in the automation, script and scene editors. Wikilinks open the entity, device, area or note they point at.
+- **An editor like Obsidian's.** Markdown renders as you write it, and the syntax shows only on the line you're editing. Type `[[` to link a note, an entity, a device or an area. The panel saves as you type.
 - **A generated note for everything**, linked to its device, area, integration and whatever it's built from, so Obsidian's graph and backlinks show how your home fits together.
 - **Templates**, so a light's note asks for the bulb and the breaker and a battery device's for a replacement log.
 - **Actions for AI and automations**, plus a skill that teaches assistants to use them.

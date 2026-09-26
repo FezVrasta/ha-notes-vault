@@ -13,8 +13,9 @@
  *
  * Everything visible is a stock Home Assistant element (ha-card, ha-expansion-panel,
  * ha-markdown, ha-form, ha-button, ha-icon-button, ha-list, ha-input-search,
- * ha-top-app-bar-fixed, ha-spinner, ha-alert). The CSS here is layout and spacing
- * only, so the notes look like the rest of the UI and follow its theme.
+ * ha-top-app-bar-fixed, ha-spinner, ha-alert), except the editor: CodeMirror with an
+ * Obsidian-style live preview, in editor.js, loaded the first time a note is edited.
+ * Its source and build are in frontend-src/.
  */
 
 const VERSION = "0.1.0";
@@ -38,6 +39,33 @@ const getInfo = (hass) => {
   }
   return infoPromise;
 };
+
+let editorModule;
+/** The live-preview editor. Loaded on first use, with the same cache-busting query. */
+const loadEditor = () => {
+  editorModule ??= import(new URL(`./editor.js${new URL(import.meta.url).search}`, import.meta.url).href);
+  return editorModule;
+};
+
+let notesCache;
+/** Every note in the vault, for link completion and for links typed since the last save. */
+const listNotes = (hass) => {
+  if (!notesCache || Date.now() - notesCache.at > 30000) {
+    notesCache = {
+      at: Date.now(),
+      notes: hass
+        .callWS({ type: "notes_vault/tree" })
+        .then((result) => result.notes)
+        .catch(() => []),
+    };
+  }
+  return notesCache.notes;
+};
+
+/** How long the panel waits after the last keystroke before saving. */
+const AUTOSAVE_MS = 1000;
+const CONFLICT =
+  "This note changed while you were editing it. Copy anything you want to keep, then load the new version.";
 
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -89,8 +117,16 @@ const STYLE = `
   .empty { font-size: inherit; }
   .path { word-break: break-all; }
   ha-markdown { overflow-wrap: anywhere; }
+  .editor { min-height: 96px; cursor: text; }
+  :host(:not([variant="panel"])) .editor {
+    border: 1px solid var(--divider-color);
+    border-radius: var(--ha-border-radius-md, 8px);
+    padding: 8px 12px;
+  }
+  :host([variant="panel"]) .editor { min-height: 50vh; }
+  .status { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); }
   .actions, .card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-  .card-actions .spacer { flex: 1; }
+  .card-actions .spacer, .actions .spacer { flex: 1; }
   ha-spinner { align-self: center; }
   ha-card + ha-card { margin-top: 16px; }
   ha-list { --mdc-list-vertical-padding: 0; }
@@ -98,24 +134,8 @@ const STYLE = `
 
 const NOTE_FIELD = { name: "note", selector: { text: { multiline: true } } };
 const BLANK = "__blank__";
+const MDI_CHECK = "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z";
 
-/** The editor's fields: a template picker while starting a note, then the text. */
-const editorSchema = (templates) =>
-  templates?.length
-    ? [
-        {
-          name: "template",
-          required: true,
-          selector: {
-            select: {
-              mode: "dropdown",
-              options: [...templates.map((t) => ({ value: t, label: t })), { value: BLANK, label: "Blank" }],
-            },
-          },
-        },
-        NOTE_FIELD,
-      ]
-    : [NOTE_FIELD];
 
 /**
  * The note editor. `setTarget({entity_id})`, `{device_id}`, `{area_id}` or `{path}`.
@@ -140,6 +160,8 @@ class NotesVaultNote extends HTMLElement {
           ev.stopPropagation();
           this._save();
         } else if (ev.key === "Escape") {
+          // The completion list closes first, and the panel has nothing to cancel.
+          if (this._autosaves || this.shadowRoot.querySelector(".cm-tooltip-autocomplete")) return;
           // Close the editor, not the dialog around it.
           ev.preventDefault();
           ev.stopPropagation();
@@ -165,9 +187,17 @@ class NotesVaultNote extends HTMLElement {
     return this.getAttribute("variant") || "card";
   }
 
+  /** The panel saves as you type, the way Obsidian does. Everywhere else has Save. */
+  get _autosaves() {
+    return this._variant === "panel" && !!this._state.canEdit;
+  }
+
   setTarget(target) {
     const key = JSON.stringify(target);
     if (key === this._targetKey) return;
+    // Anything typed into the note being left is saved on the way out.
+    if (this._autosaves && this._state.editing) this._autosave();
+    this._destroyEditor();
     this._target = target;
     this._targetKey = key;
     this._state = { loading: true };
@@ -180,6 +210,8 @@ class NotesVaultNote extends HTMLElement {
   }
 
   disconnectedCallback() {
+    if (this._autosaves && this._state.editing) this._autosave();
+    this._destroyEditor();
     if (this._unsub) {
       this._unsub.then((unsub) => unsub()).catch(() => {});
       this._unsub = null;
@@ -194,8 +226,11 @@ class NotesVaultNote extends HTMLElement {
     if (!info.can_edit || !this.isConnected) return;
     this._unsub = hass.connection
       .subscribeEvents((ev) => {
-        if (this._state.editing || !this._state.path) return;
-        if (ev.data.path === this._state.path && ev.data.source !== "ui") this._load();
+        if (!this._state.path || ev.data.path !== this._state.path || ev.data.source === "ui") return;
+        // An open editor with nothing unsaved follows the change. One with unsaved
+        // text keeps it, and the save that follows reports the conflict.
+        const idle = this._autosaves && !this._saving && this._state.draft === this._base;
+        if (!this._state.editing || idle) this._load();
       }, "notes_vault_updated")
       .catch(() => {});
   }
@@ -213,10 +248,10 @@ class NotesVaultNote extends HTMLElement {
         const result = await hass.callWS({ type: "notes_vault/get", ...target });
         if (target !== this._target) return;
         this._state = { ...result, canEdit: info.can_edit };
-        // In the panel, a note that doesn't exist yet is one being created. Every
-        // other note opens to read.
-        if (target.path && info.can_edit && !result.exists) {
-          this._edit();
+        // The panel opens every note straight into the editor, and focuses one that
+        // doesn't exist yet, since that's one being created.
+        if (this._variant === "panel" && info.can_edit) {
+          this._edit({ focus: !result.exists });
           return;
         }
       }
@@ -235,6 +270,7 @@ class NotesVaultNote extends HTMLElement {
       // meanwhile by an assistant, Obsidian or another tab.
       const mtime = this._state.exists ? (this._state.mtime ?? null) : null;
       const result = await this.hass.callWS({ type: "notes_vault/set", note, mtime, ...this._target });
+      this._destroyEditor();
       this._state = { ...result, canEdit: this._state.canEdit };
       this._fire("notes-vault-changed", { path: result.path });
     } catch (err) {
@@ -258,8 +294,9 @@ class NotesVaultNote extends HTMLElement {
     }
   }
 
-  async _edit() {
+  async _edit({ focus = true } = {}) {
     const starting = !this._state.note;
+    this._focusOnMount = focus;
     this._state = { ...this._state, editing: true, draft: this._state.note || "", templates: undefined };
     // A new note on an entity, device or area starts from the template that fits it,
     // or the one it was pre-filled with, with the others on offer.
@@ -275,9 +312,183 @@ class NotesVaultNote extends HTMLElement {
         if (current) this._state.draft = current.body;
       }
     }
+    // What's on disk, or the template a new note starts from: nothing to save yet.
+    this._base = this._state.draft;
+    this._editor?.setValue(this._state.draft);
     this._render();
-    // ha-form loads the text selector lazily; focus once it has rendered.
-    setTimeout(() => this.shadowRoot.querySelector("ha-form")?.focus?.(), 200);
+    if (this._state.plain && focus) {
+      // ha-form loads the text selector lazily; focus once it has rendered.
+      setTimeout(() => this.shadowRoot.querySelector("ha-form")?.focus?.(), 200);
+    }
+  }
+
+  /** Show the live-preview editor in its slot, creating it the first time. */
+  _mountEditor() {
+    const slot = this.shadowRoot.querySelector(".editor-slot");
+    if (!slot) return;
+    const hadFocus = this._editor?.view.hasFocus;
+    if (!this._editorHost) {
+      const host = document.createElement("div");
+      host.className = "editor";
+      // Clicking the empty space below the text puts the cursor at the end.
+      host.addEventListener("mousedown", (ev) => {
+        if (ev.target !== host || !this._editor) return;
+        ev.preventDefault();
+        const { view } = this._editor;
+        view.focus();
+        view.dispatch({ selection: { anchor: view.state.doc.length } });
+      });
+      this._editorHost = host;
+      loadEditor()
+        .then((mod) => {
+          if (host !== this._editorHost) return;
+          this._editor = mod.createEditor({
+            parent: host,
+            root: this.shadowRoot,
+            doc: this._state.draft ?? "",
+            resolveLink: (target) => this._resolveLink(target),
+            listNotes: () => this._noteOptions(),
+            onChange: (text) => this._changed(text),
+            hint: "Start writing. Type [[ to link a note, an entity, a device or an area.",
+          });
+          if (this._focusOnMount) this._editor.focus();
+          this._focusOnMount = false;
+          // Links typed since the last save resolve against the note list.
+          this._noteOptions().then(() => this._editor?.refreshLinks());
+        })
+        .catch(() => {
+          // No editor (an old browser, a failed download): the plain text box.
+          this._destroyEditor();
+          this._state.plain = true;
+          this._render();
+        });
+    }
+    slot.replaceWith(this._editorHost);
+    if (this._editor) {
+      this._editor.view.requestMeasure();
+      if (hadFocus) this._editor.focus();
+    }
+  }
+
+  _destroyEditor() {
+    clearTimeout(this._timer);
+    this._timer = null;
+    this._editor?.destroy();
+    this._editor = null;
+    this._editorHost = null;
+  }
+
+  _changed(text) {
+    this._state.draft = text;
+    if (text !== this._base) this.shadowRoot.querySelector(".template-menu")?.remove();
+    if (!this._autosaves || this._state.conflict) return;
+    this._setStatus();
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => this._autosave(), AUTOSAVE_MS);
+  }
+
+  /** Save the panel's note if it changed, without redrawing the editor. */
+  async _autosave() {
+    clearTimeout(this._timer);
+    this._timer = null;
+    if (this._saving) {
+      this._saveAgain = true;
+      return;
+    }
+    const draft = this._state.draft ?? "";
+    if (draft === this._base || this._state.conflict) return;
+    const target = this._target;
+    const mtime = this._state.exists ? (this._state.mtime ?? null) : null;
+    this._saving = true;
+    this._setStatus();
+    try {
+      const result = await this.hass.callWS({ type: "notes_vault/set", note: draft, mtime, ...target });
+      if (target !== this._target) return;
+      const created = !this._state.exists;
+      this._base = draft;
+      const { backlinks } = this._state;
+      Object.assign(this._state, result, { backlinks: result.backlinks ?? backlinks, draft: this._state.draft });
+      this._editor?.refreshLinks();
+      if (created) this._fire("notes-vault-changed", { path: result.path });
+    } catch (err) {
+      if (target !== this._target) return;
+      this._state.conflict = err.code === "changed";
+      this._state.error = this._state.conflict ? CONFLICT : err.message || String(err);
+      this._render();
+    } finally {
+      this._saving = false;
+      this._setStatus();
+      if (this._saveAgain) {
+        this._saveAgain = false;
+        this._autosave();
+      }
+    }
+  }
+
+  _setStatus() {
+    const status = this.shadowRoot.querySelector(".status");
+    if (status) status.textContent = this._statusText();
+  }
+
+  _statusText() {
+    if (this._saving) return "Saving…";
+    if (this._state.draft !== this._base) return "Unsaved";
+    return this._state.exists ? "Saved" : "";
+  }
+
+  /** Throw away what's unsaved and load the note as it is now. */
+  _reload() {
+    this._destroyEditor();
+    this._state = { loading: true };
+    this._render();
+    this._load();
+  }
+
+  /** Where a wikilink in the editor goes, and the name to show for it. */
+  _resolveLink(target) {
+    const inPanel = this._variant === "panel";
+    const known = this._state.links?.[target];
+    const path = known?.path || this._notePaths?.get(target);
+    if (!path) {
+      // A link to a note that doesn't exist yet creates it, as in Obsidian.
+      const newPath = `${target}.md`;
+      let href = null;
+      if (inPanel) href = `#notes-vault-path=${encodeURIComponent(newPath)}`;
+      else if (this._state.canEdit) href = panelHref(newPath);
+      return { href, exists: false };
+    }
+    const href = inPanel
+      ? `#notes-vault-path=${encodeURIComponent(path)}`
+      : (known && haHref(known)) || panelHref(path);
+    return { href, label: this._noteNames?.get(path), exists: true };
+  }
+
+  /**
+   * The notes a `[[` can complete to. A link uses the file name when that's
+   * unique in the vault, as Obsidian does, and the full path otherwise.
+   */
+  async _noteOptions() {
+    const notes = await listNotes(this.hass);
+    const counts = new Map();
+    for (const note of notes) {
+      const name = fileName(note.path);
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    this._notePaths = new Map();
+    this._noteNames = new Map();
+    const options = notes.map((note) => {
+      const full = note.path.replace(/\.md$/, "");
+      const name = fileName(note.path);
+      this._notePaths.set(full, note.path);
+      if (!this._notePaths.has(name)) this._notePaths.set(name, note.path);
+      if (note.name) this._noteNames.set(note.path, note.name);
+      return {
+        target: counts.get(name) > 1 ? full : name,
+        label: note.name || name,
+        detail: note.path.includes("/") ? note.path.slice(0, note.path.lastIndexOf("/")) : "",
+      };
+    });
+    return options;
   }
 
   async _pickTemplate(name) {
@@ -288,6 +499,9 @@ class NotesVaultNote extends HTMLElement {
       const result = await this.hass.callWS({ type: "notes_vault/template", name, ...this._target });
       this._state.draft = result.template?.body ?? "";
     }
+    // Another template is still an untouched note, not something to save.
+    this._base = this._state.draft;
+    this._editor?.setValue(this._state.draft);
     this._render();
   }
 
@@ -297,6 +511,7 @@ class NotesVaultNote extends HTMLElement {
       this._fire("notes-vault-changed", { path: this._state.path, deleted: true });
       return;
     }
+    this._destroyEditor();
     this._state = {
       ...this._state,
       editing: false,
@@ -351,6 +566,25 @@ class NotesVaultNote extends HTMLElement {
     }
   }
 
+  /**
+   * The template menu, offered while the note is still a template: the first
+   * keystroke makes it yours, and switching then would throw the text away.
+   */
+  _templateMenu() {
+    const s = this._state;
+    if (!s.editing || !s.templates?.length || s.draft !== this._base) return "";
+    if (!customElements.get("ha-dropdown")) return "";
+    const items = [...s.templates, BLANK]
+      .map(
+        (t) =>
+          // A tick on the current one only: a checkbox on every item reads as
+          // "pick several".
+          `<ha-dropdown-item value="${escapeHtml(t)}"><ha-svg-icon slot="icon" ${t === s.templateName ? `path="${MDI_CHECK}"` : ""}></ha-svg-icon>${escapeHtml(t === BLANK ? "Blank" : t)}</ha-dropdown-item>`,
+      )
+      .join("");
+    return `<ha-dropdown class="template-menu" placement="top-start"><ha-button slot="trigger" size="s" appearance="plain" with-caret>Template</ha-button>${items}</ha-dropdown>`;
+  }
+
   _button(action, label, { appearance = "plain", variant, disabled = false } = {}) {
     return `<ha-button size="s" appearance="${appearance}" ${variant ? `variant="${variant}"` : ""} data-action="${action}" ${disabled ? "disabled" : ""}>${escapeHtml(label)}</ha-button>`;
   }
@@ -371,7 +605,11 @@ class NotesVaultNote extends HTMLElement {
     if (s.loading) {
       body = `<ha-spinner size="small"></ha-spinner>`;
     } else if (s.editing) {
-      body = `<ha-form></ha-form>${s.error ? `<ha-alert alert-type="error">${escapeHtml(s.error)}</ha-alert>` : ""}`;
+      const form = s.plain ? `<ha-form></ha-form>` : "";
+      const editor = s.plain ? "" : `<div class="editor-slot"></div>`;
+      const reload = s.conflict ? `<ha-button slot="action" size="s" data-action="reload">Load the new version</ha-button>` : "";
+      const error = s.error ? `<ha-alert alert-type="${s.conflict ? "warning" : "error"}">${escapeHtml(s.error)}${reload}</ha-alert>` : "";
+      body = `${form}${editor}${error}`;
     } else if (s.error) {
       body = `<ha-alert alert-type="error">${escapeHtml(s.error)}</ha-alert>`;
     } else if (s.note || (inPanel && s.template?.body)) {
@@ -383,11 +621,13 @@ class NotesVaultNote extends HTMLElement {
     const path = showPath ? `<span class="path">${escapeHtml(s.path)}</span>` : "";
 
     let actions = "";
-    if (s.editing) {
+    const menu = this._templateMenu();
+    if (s.editing && !this._autosaves) {
       actions =
+        (menu ? `${menu}<span class="spacer"></span>` : "") +
         this._button("cancel", "Cancel", { disabled: s.saving }) +
         this._button("save", s.saving ? "Saving…" : "Save", { appearance: "filled", disabled: s.saving });
-    } else if (!s.loading && !s.error && s.canEdit) {
+    } else if (!s.loading && (!s.error || s.editing) && s.canEdit) {
       const extra = [];
       if (inPanel && s.ha) {
         const label = { entity: "Show entity", device: "Go to device", area: "Go to area", integration: "Go to integration" }[s.ha.type];
@@ -405,7 +645,11 @@ class NotesVaultNote extends HTMLElement {
         );
       }
       const hasText = s.note || (inPanel && s.template?.body);
-      actions = extra.join("") + `<span class="spacer"></span>` + this._button("edit", hasText ? "Edit" : "Add note");
+      if (menu) extra.push(menu);
+      const end = this._autosaves
+        ? `<span class="status">${escapeHtml(this._statusText())}</span>`
+        : this._button("edit", hasText ? "Edit" : "Add note");
+      actions = extra.join("") + `<span class="spacer"></span>` + end;
     }
 
     const content = `<div class="body">${path}${body}</div>`;
@@ -416,7 +660,7 @@ class NotesVaultNote extends HTMLElement {
       </ha-card>`;
 
     let backlinks = "";
-    if (inPanel && s.backlinks?.length && !s.editing) {
+    if (inPanel && s.backlinks?.length && (!s.editing || this._autosaves)) {
       backlinks = `
         <ha-card header="Linked mentions">
           <ha-list>
@@ -449,23 +693,23 @@ class NotesVaultNote extends HTMLElement {
       md.content = renderWikilinks(text, s.links, { inPanel, canBrowse: s.canEdit });
     }
 
+    if (s.editing && !s.plain) this._mountEditor();
+    this.shadowRoot
+      .querySelector(".template-menu")
+      ?.addEventListener("wa-select", (ev) => this._pickTemplate(ev.detail.item.value));
+
     const form = this.shadowRoot.querySelector("ha-form");
     if (form) {
       form.hass = this.hass;
-      form.schema = editorSchema(s.templates);
-      form.data = { note: s.draft ?? "", template: s.templateName };
+      form.schema = [NOTE_FIELD];
+      form.data = { note: s.draft ?? "" };
       form.disabled = !!s.saving;
-      form.computeLabel = (field) => (field.name === "template" ? "Template" : "");
+      form.computeLabel = () => "";
       form.computeHelper = (field) =>
         field.name === "note" ? "Markdown. Link with [[light.kitchen]] or [[Device name]]." : "";
       form.addEventListener("value-changed", (ev) => {
-        const value = ev.detail.value;
-        if (value.template && value.template !== this._state.templateName) {
-          this._pickTemplate(value.template);
-          return;
-        }
-        this._state.draft = value.note ?? "";
-        form.data = { note: this._state.draft, template: this._state.templateName };
+        this._changed(ev.detail.value.note ?? "");
+        form.data = { note: this._state.draft };
       });
     }
   }
