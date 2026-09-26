@@ -122,7 +122,9 @@ notes_vault/
 ├── Home Assistant/
 │   ├── Areas/  Devices/  Entities/  Integrations/
 │   ├── Automations/  Scripts/  Scenes/
+│   ├── Bases/        Obsidian views, and a page per room
 │   ├── Templates/
+│   ├── Rooms.md  Devices.md  Automations.md  …
 │   └── Index.md
 └── anything else you write
 ```
@@ -184,6 +186,22 @@ The vault is in the Obsidian format, so Obsidian works on it, and so does anythi
 
 In Obsidian, sync with [remotely-save](https://github.com/remotely-save/remotely-save): pick **WebDAV**, use the settings above, set **Auth type** to `basic`, **Depth header** to `only supports depth='1'`, and **Change the remote base directory** to `vault`. Start from an empty Obsidian vault the first time.
 
+### Views
+
+Notes Vault adds a set of [Bases](https://obsidian.md/help/bases), Obsidian's database views, each in a note next to the index that says what it's for:
+
+| Note | Shows |
+| --- | --- |
+| Rooms | A card per room, each opening that room's page: its devices, entities, automations, scripts and scenes |
+| Devices | Every device by room, by integration, or all together |
+| Automations | Every automation and script, the ones with no description, and the most connected |
+| Integrations | Every entity grouped by its integration, and integrations by size |
+| Batteries | Every battery sensor, by room |
+| Recently changed | What changed lately, yours or generated |
+| Cleanup | Notes about removed things, devices with no room, and helpers to check |
+
+They're written once and then yours: change a view, delete one, and an update won't bring it back. Delete the `Bases` folder to get every default back. The room pages are the exception: Notes Vault keeps one per area and rewrites them, so write about a room in its own note. Views only show in Obsidian; the Notes panel in Home Assistant says so where one is embedded.
+
 [Obsidian tips](docs/obsidian.md) covers showing names instead of entity IDs, a cleaner graph, Dataview queries and Obsidian-side MCP servers.
 
 ## Options
@@ -194,6 +212,7 @@ In Obsidian, sync with [remotely-save](https://github.com/remotely-save/remotely
 | --- | --- | --- |
 | Folder for generated notes | `Home Assistant` | Inside the vault |
 | Generate entity / device / area / integration notes | on | |
+| Add Obsidian views | on | The Bases above, and a page per room |
 | Include diagnostic / configuration entities | off | A large share of most installs |
 | Include hidden / disabled | off | |
 | Skip these domains | `geo_location` | Feeds create and drop these by the minute |

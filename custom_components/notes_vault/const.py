@@ -18,6 +18,7 @@ CONF_GENERATE_ENTITIES: Final = "generate_entities"
 CONF_GENERATE_DEVICES: Final = "generate_devices"
 CONF_GENERATE_AREAS: Final = "generate_areas"
 CONF_GENERATE_INTEGRATIONS: Final = "generate_integrations"
+CONF_GENERATE_VIEWS: Final = "generate_views"
 CONF_INCLUDE_HIDDEN: Final = "include_hidden"
 CONF_INCLUDE_DISABLED: Final = "include_disabled"
 CONF_INCLUDE_DIAGNOSTIC: Final = "include_diagnostic"
@@ -36,6 +37,7 @@ DEFAULT_OPTIONS: Final = {
     CONF_GENERATE_DEVICES: True,
     CONF_GENERATE_AREAS: True,
     CONF_GENERATE_INTEGRATIONS: True,
+    CONF_GENERATE_VIEWS: True,
     CONF_INCLUDE_HIDDEN: False,
     CONF_INCLUDE_DISABLED: False,
     CONF_INCLUDE_DIAGNOSTIC: False,
@@ -68,6 +70,8 @@ KIND_ENTITY: Final = "entity"
 KIND_DEVICE: Final = "device"
 KIND_AREA: Final = "area"
 KIND_INTEGRATION: Final = "integration"
+#: A generated room page: a view of one area, not a note about it.
+KIND_ROOM: Final = "room"
 
 #: Generated folder for each kind of note, inside the generated notes folder.
 KIND_FOLDERS: Final = {

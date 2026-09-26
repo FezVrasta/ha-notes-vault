@@ -98,7 +98,15 @@ const haHref = (ha) => {
  */
 const renderWikilinks = (text, links, { inPanel, canBrowse }) =>
   text
-    .replace(/!\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (_m, target, label) => `*${label || fileName(target)}*`)
+    .replace(/!\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (_m, target, label) => {
+      // An Obsidian Base only renders in Obsidian: say what's there instead.
+      const base = /^(.*?)\.base(?:#(.+))?$/.exec(target.trim());
+      if (base) {
+        const name = base[2] || fileName(base[1]);
+        return `> *${name}* is an Obsidian view. Open this note in Obsidian to see it.`;
+      }
+      return `*${label || fileName(target)}*`;
+    })
     .replace(/\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|([^\]]*))?\]\]/g, (_m, target, label) => {
       const shown = label || fileName(target);
       const link = links?.[target.trim()];

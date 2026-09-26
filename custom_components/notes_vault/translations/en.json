@@ -31,6 +31,7 @@
           "generate_devices": "Generate device notes",
           "generate_areas": "Generate area notes",
           "generate_integrations": "Generate integration notes",
+          "generate_views": "Add Obsidian views",
           "include_diagnostic": "Include diagnostic entities",
           "include_config": "Include configuration entities",
           "include_hidden": "Include hidden entities",
@@ -46,6 +47,7 @@
         "data_description": {
           "base_folder": "Inside the vault. Leave empty to put the Entities, Devices, Areas and Integrations folders at the top level.",
           "generate_integrations": "A note per integration, linking its devices and the entities that have no device, so things without an area aren't left on their own in the graph.",
+          "generate_views": "Obsidian Bases for rooms, automations, integrations, batteries, recent changes and cleanup, each in a note next to the index, plus a page per room. Written once and then yours to change; the room pages follow your areas.",
           "webdav": "Needed for the remotely-save plugin in Obsidian. Clients sign in with a long-lived access token of an administrator.",
           "include_service_devices": "Devices that integrations and add-ons register for themselves (Sun, Backup, add-ons, cloud services). They aren't things in the house, and each integration already has a note. Their entities are linked from the integration's note either way."
         }
