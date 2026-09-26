@@ -248,6 +248,10 @@ class Doc:
     #: the file holds a note.
     wanted: bool
     managed: dict[str, Any] = field(default_factory=dict)
+    #: Excluded by name in the options (entity, device, domain, integration, label)
+    #: rather than by a default filter like hidden or diagnostic. Only these stay
+    #: without a note when an automation, script or scene uses them.
+    excluded: bool = False
     aliases: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     #: Tell apart notes whose names collide, most readable first: "Box (Shelly)"
@@ -735,13 +739,16 @@ class NotesVault:
             )
             if entry.platform in ALWAYS_SKIPPED_INTEGRATIONS:
                 continue
+            excluded = (
+                entry.entity_id in exclude_entities
+                or entry.domain in exclude_domains
+                or entry.platform in exclude_integrations
+                or bool(entry.labels & exclude_labels)
+                or bool(device and device.id in exclude_devices)
+            )
             wanted = (
                 opts[CONF_GENERATE_ENTITIES]
-                and entry.entity_id not in exclude_entities
-                and entry.domain not in exclude_domains
-                and entry.platform not in exclude_integrations
-                and not (entry.labels & exclude_labels)
-                and not (device and device.id in exclude_devices)
+                and not excluded
                 and (opts[CONF_INCLUDE_HIDDEN] or entry.hidden_by is None)
                 and (opts[CONF_INCLUDE_DISABLED] or entry.disabled_by is None)
                 and (
@@ -759,6 +766,7 @@ class NotesVault:
                 name=name,
                 wanted=bool(wanted),
             )
+            doc.excluded = excluded
             doc.managed.update(
                 {
                     "integration": entry.platform,
@@ -797,6 +805,9 @@ class NotesVault:
             )
             doc.managed["device_class"] = state.attributes.get("device_class")
             doc.managed["unit"] = state.attributes.get("unit_of_measurement")
+            doc.excluded = (
+                state.entity_id in exclude_entities or state.domain in exclude_domains
+            )
             docs[doc.key] = doc
 
         known = {d.managed["entity_id"] for d in docs.values() if d.kind == KIND_ENTITY}
@@ -807,10 +818,41 @@ class NotesVault:
                         doc.managed["domain"], doc.managed["entity_id"], known
                     )
                 )
+        self._include_used_entities(docs)
         if references:
             self._add_references(docs, known)
         self._add_integrations(docs)
         return docs
+
+    @callback
+    def _include_used_entities(self, docs: dict[DocKey, Doc]) -> None:
+        """Give every entity an automation, script or scene uses a note, and link its device.
+
+        The default filters (hidden, diagnostic, configuration, disabled) keep noise
+        out of the vault, but an entity the home's logic acts on isn't noise: without
+        its note the automation's link to it, and so to its device, would drop out.
+        Only entities excluded by name in the options stay out.
+        """
+        if not self.options[CONF_GENERATE_ENTITIES]:
+            return
+        ent_reg = er.async_get(self.hass)
+        by_entity_id = {
+            d.managed["entity_id"]: d for d in docs.values() if d.kind == KIND_ENTITY
+        }
+        for doc in docs.values():
+            m = doc.managed
+            if doc.kind != KIND_ENTITY or m["domain"] not in DOMAIN_FOLDERS:
+                continue
+            devices = set(m.get("devices") or [])
+            for entity_id in m.get("entities") or []:
+                used = by_entity_id.get(entity_id)
+                if used and not used.wanted and not used.excluded:
+                    used.wanted = True
+                # The devices it acts on, not only the ones it targets directly.
+                if (entry := ent_reg.async_get(entity_id)) and entry.device_id:
+                    devices.add(entry.device_id)
+            if "devices" in m or devices:
+                m["devices"] = sorted(devices)
 
     @callback
     def _add_references(self, docs: dict[DocKey, Doc], known: set[str]) -> None:

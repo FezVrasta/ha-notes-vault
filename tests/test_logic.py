@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
+from custom_components.notes_vault.const import CONF_EXCLUDE_ENTITIES, DEFAULT_OPTIONS
 from custom_components.notes_vault.manager import NotesVault
 from custom_components.notes_vault.vault import parse_note
 
@@ -105,3 +108,62 @@ async def test_existing_notes_move_to_their_folder(
     assert moved.exists()
     assert not legacy.exists()
     assert (vault_dir / "Log.md").read_text() == f"Ran [[{BASE}/Scripts/script.old]].\n"
+
+
+async def _lamp_automation(hass: HomeAssistant) -> None:
+    assert await async_setup_component(
+        hass,
+        "automation",
+        {
+            "automation": {
+                "id": "lamp_reboot",
+                "alias": "Lamp reboot",
+                "triggers": [{"trigger": "event", "event_type": "night"}],
+                "actions": [
+                    {
+                        "action": "light.turn_off",
+                        "target": {"entity_id": "light.kitchen_ceiling"},
+                    }
+                ],
+            }
+        },
+    )
+    await hass.async_block_till_done()
+
+
+async def test_used_entity_gets_a_note_and_its_device(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A hidden entity the home's logic uses gets a note, and its device a link."""
+    er.async_get(hass).async_update_entity(
+        home["light"].entity_id, hidden_by=er.RegistryEntryHider.USER
+    )
+    await _lamp_automation(hass)
+    await manager.async_sync()
+
+    assert (vault_dir / f"{BASE}/Entities/light.kitchen_ceiling.md").exists()
+    auto = parse_note(
+        (vault_dir / f"{BASE}/Automations/automation.lamp_reboot.md").read_text()
+    ).frontmatter
+    assert auto["entities"] == [
+        f"[[{BASE}/Entities/light.kitchen_ceiling|Ceiling lamp]]"
+    ]
+    assert auto["devices"] == [f"[[{BASE}/Devices/Ceiling lamp|Ceiling lamp]]"]
+
+
+@pytest.mark.parametrize(
+    "options", [{**DEFAULT_OPTIONS, CONF_EXCLUDE_ENTITIES: ["light.kitchen_ceiling"]}]
+)
+async def test_excluded_entity_stays_out(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """An entity excluded by name keeps no note, but its device is still linked."""
+    await _lamp_automation(hass)
+    await manager.async_sync()
+
+    assert not (vault_dir / f"{BASE}/Entities/light.kitchen_ceiling.md").exists()
+    auto = parse_note(
+        (vault_dir / f"{BASE}/Automations/automation.lamp_reboot.md").read_text()
+    ).frontmatter
+    assert "entities" not in auto
+    assert auto["devices"] == [f"[[{BASE}/Devices/Ceiling lamp|Ceiling lamp]]"]
