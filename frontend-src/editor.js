@@ -23,7 +23,7 @@ import {
   syntaxHighlighting,
   syntaxTree,
 } from "@codemirror/language";
-import { EditorState, StateEffect } from "@codemirror/state";
+import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -313,6 +313,140 @@ const livePreview = (resolveLink) =>
   );
 
 /** Markdown styling that holds whether or not the syntax is showing. */
+/** Whether the editor has focus, kept in the state so block decorations can see it. */
+const setFocus = StateEffect.define();
+const focusState = StateField.define({
+  create: () => false,
+  update(focused, tr) {
+    for (const effect of tr.effects) if (effect.is(setFocus)) return effect.value;
+    return focused;
+  },
+});
+const trackFocus = EditorView.focusChangeEffect.of((_state, focusing) => setFocus.of(focusing));
+
+const escapeHtml = (text) =>
+  text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/** Inline Markdown inside a table cell: emphasis, code, links and wikilinks. */
+const renderInline = (text, resolveLink) => {
+  const code = [];
+  let html = escapeHtml(text).replace(/`([^`]+)`/g, (_m, inner) => {
+    code.push(`<code>${inner}</code>`);
+    return `\u0000${code.length - 1}\u0000`;
+  });
+  html = html
+    .replace(/\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|([^\]]*))?\]\]/g, (_m, target, label) => {
+      const resolved = resolveLink?.(target.trim()) || null;
+      const shown = label || resolved?.label || fileName(target);
+      const cls = `cm-np-link${resolved?.exists ? "" : " cm-np-unresolved"}`;
+      return resolved?.href ? `<a class="${cls}" href="${resolved.href}">${shown}</a>` : `<span class="${cls}">${shown}</span>`;
+    })
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, href) =>
+      /^(https?:|\/|#)/.test(href)
+        ? `<a class="cm-np-link" href="${href}"${/^https?:/.test(href) ? ' target="_blank" rel="noopener noreferrer"' : ""}>${label}</a>`
+        : label,
+    )
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+    .replace(/~~([^~]+)~~/g, "<s>$1</s>");
+  return html.replace(/\u0000(\d+)\u0000/g, (_m, i) => code[Number(i)]);
+};
+
+/** The cells of one table row, without the outer pipes. Escaped pipes stay text. */
+const tableCells = (line) =>
+  line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim().replace(/\\\|/g, "|"));
+
+class TableWidget extends WidgetType {
+  constructor(source, from, resolveLink) {
+    super();
+    this.source = source;
+    this.from = from;
+    this.resolveLink = resolveLink;
+  }
+
+  eq(other) {
+    return other.source === this.source && other.from === this.from;
+  }
+
+  toDOM(view) {
+    const [head = [], delimiter = [], ...body] = this.source.split("\n").map(tableCells);
+    const align = delimiter.map((cell) =>
+      /^:-+:$/.test(cell) ? "center" : /-:$/.test(cell) ? "right" : /^:/.test(cell) ? "left" : "",
+    );
+    const cell = (tag, text, i) =>
+      `<${tag}${align[i] ? ` style="text-align:${align[i]}"` : ""}>${renderInline(text ?? "", this.resolveLink)}</${tag}>`;
+    const wrap = document.createElement("div");
+    wrap.className = "cm-np-table";
+    wrap.innerHTML = `<table><thead><tr>${head.map((t, i) => cell("th", t, i)).join("")}</tr></thead><tbody>${body
+      .map((row) => `<tr>${head.map((_h, i) => cell("td", row[i], i)).join("")}</tr>`)
+      .join("")}</tbody></table>`;
+    // A click anywhere but a link edits the table, as in Obsidian: the cursor goes
+    // into it and the Markdown comes back.
+    wrap.addEventListener("mousedown", (ev) => {
+      if (ev.target.closest("a")) return;
+      ev.preventDefault();
+      view.dispatch({ selection: { anchor: this.from } });
+      view.focus();
+    });
+    return wrap;
+  }
+
+  // Links go to the note element, clicks elsewhere are handled above.
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Tables render unless the cursor is in one. They span lines, which only a state
+ * field may replace, so this sits beside the live-preview plugin rather than in it.
+ */
+const tables = (resolveLink) => {
+  const build = (state) => {
+    const focused = state.field(focusState, false);
+    const decorations = [];
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name !== "Table") return undefined;
+        const from = state.doc.lineAt(node.from).from;
+        const to = state.doc.lineAt(node.to).to;
+        const editing = focused && state.selection.ranges.some((r) => r.to >= from && r.from <= to);
+        if (!editing) {
+          decorations.push(
+            Decoration.replace({
+              widget: new TableWidget(state.doc.sliceString(from, to), from, resolveLink),
+              block: true,
+            }).range(from, to),
+          );
+        }
+        return false;
+      },
+    });
+    return Decoration.set(decorations, true);
+  };
+  return StateField.define({
+    create: build,
+    update(decorations, tr) {
+      if (
+        tr.docChanged ||
+        tr.selection ||
+        tr.effects.some((e) => e.is(setFocus) || e.is(refreshLinks)) ||
+        syntaxTree(tr.startState) !== syntaxTree(tr.state)
+      ) {
+        return build(tr.state);
+      }
+      return decorations;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+};
+
 const highlight = HighlightStyle.define([
   { tag: tags.strong, fontWeight: "bold" },
   { tag: tags.emphasis, fontStyle: "italic" },
@@ -375,6 +509,30 @@ const theme = EditorView.theme({
     width: "100%",
     borderTop: "1px solid var(--divider-color)",
     verticalAlign: "middle",
+  },
+  ".cm-np-table": { overflowX: "auto", padding: "4px 0" },
+  // The editor wraps lines anywhere, which would squeeze cells to a letter wide;
+  // a table wraps at words and scrolls sideways when it doesn't fit.
+  ".cm-np-table table": {
+    borderCollapse: "collapse",
+    fontSize: "0.95em",
+    whiteSpace: "normal",
+    wordBreak: "normal",
+    overflowWrap: "normal",
+  },
+  ".cm-np-table th, .cm-np-table td": {
+    border: "1px solid var(--divider-color)",
+    padding: "4px 10px",
+    textAlign: "left",
+    verticalAlign: "top",
+  },
+  ".cm-np-table th": {
+    fontWeight: "bold",
+    backgroundColor: "var(--secondary-background-color)",
+  },
+  ".cm-np-table code": {
+    fontFamily: "var(--ha-font-family-code, monospace)",
+    fontSize: "0.9em",
   },
   ".cm-tooltip": {
     border: "1px solid var(--divider-color)",
@@ -458,7 +616,10 @@ export function createEditor({ parent, root, doc = "", resolveLink, listNotes, o
         // parsers for code embedded in notes, three times the size of the rest.
         new LanguageSupport(markdownLanguage),
         syntaxHighlighting(highlight),
+        focusState,
+        trackFocus,
         livePreview(resolveLink),
+        tables(resolveLink),
         autocompletion({ override: [wikilinkCompletion(listNotes)], icons: false }),
         keymap.of([
           // Enter continues a list or a quote, Backspace takes the marker away.
