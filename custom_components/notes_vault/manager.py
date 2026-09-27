@@ -38,7 +38,10 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.entity_platform import async_get_platforms
+from homeassistant.helpers.entity_platform import (
+    DATA_ENTITY_PLATFORM,
+    async_get_platforms,
+)
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.storage import Store
 from homeassistant.loader import Integration, async_get_integrations
@@ -117,6 +120,7 @@ MANAGED_KEYS: frozenset[str] = frozenset(
         "name",
         "domain",
         "integration",
+        "integrations",
         "device",
         "area",
         "floor",
@@ -212,6 +216,33 @@ def _mentioned_entities(value: Any, known: set[str]) -> set[str]:
             stack.extend(item)
         elif isinstance(source := getattr(item, "template", None), str):
             stack.append(source)
+    return found
+
+
+#: Action domains that say nothing about what an automation does: they act on the
+#: entities it already links, or on the home's logic itself.
+_GENERIC_ACTION_DOMAINS = frozenset({"homeassistant", "automation", "script", "scene"})
+
+#: Where a trigger-based template keeps what it reacts to, besides its entities.
+_TRIGGER_KEYS = ("trigger", "triggers", "condition", "conditions", "action", "actions")
+
+
+def _called_domains(value: Any) -> set[str]:
+    """Collect the integrations whose actions a piece of configuration calls."""
+    found: set[str] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            for key in ("action", "service"):
+                called = item.get(key)
+                if isinstance(called, str) and re.fullmatch(
+                    r"[a-z0-9_]+\.[a-z0-9_]+", called
+                ):
+                    found.add(called.split(".", 1)[0])
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
     return found
 
 
@@ -493,6 +524,8 @@ class NotesVault:
         domains |= {e.platform for e in er.async_get(self.hass).entities.values()}
         domains |= {s.domain for s in self.hass.states.async_all()}
         domains |= {e.domain for e in self.hass.config_entries.async_entries()}
+        # Integrations only called as actions (shell commands, Wake on LAN).
+        domains |= set(self.hass.services.async_services())
         missing = domains - set(self._integration_names)
         if not missing:
             return
@@ -559,6 +592,12 @@ class NotesVault:
         # Home Assistant's own lists leave out entities only read inside templates.
         details["entities"] = sorted(
             {*details["entities"], *_mentioned_entities(config, known)} - {entity_id}
+        )
+        # The integrations it calls that provide no entities of their own: a shell
+        # command, Wake on LAN, a notification. The entity links say the rest.
+        entity_domains = {e.split(".", 1)[0] for e in known}
+        details["integrations"] = sorted(
+            _called_domains(config) - entity_domains - _GENERIC_ACTION_DOMAINS
         )
         details["description"] = config.get("description") or None
         details["mode"] = config.get("mode")
@@ -787,6 +826,14 @@ class NotesVault:
             )
             docs[doc.key] = doc
 
+        # Entities without a registry entry only say which integration they belong
+        # to through the platform that created them.
+        platform_of = {
+            entity_id: platform.platform_name
+            for platforms in self.hass.data.get(DATA_ENTITY_PLATFORM, {}).values()
+            for platform in platforms
+            for entity_id in platform.entities
+        }
         for state in self.hass.states.async_all():
             if state.entity_id in seen_entity_ids:
                 continue
@@ -805,6 +852,7 @@ class NotesVault:
             )
             doc.managed["device_class"] = state.attributes.get("device_class")
             doc.managed["unit"] = state.attributes.get("unit_of_measurement")
+            doc.managed["integration"] = platform_of.get(state.entity_id)
             doc.excluded = (
                 state.entity_id in exclude_entities or state.domain in exclude_domains
             )
@@ -867,7 +915,17 @@ class NotesVault:
         configs: dict[str, Any] = {}
         for platform in async_get_platforms(self.hass, "template"):
             for entity_id, entity in platform.entities.items():
-                if (config := getattr(entity, "_config", None)) is not None:
+                config = getattr(entity, "_config", None)
+                # A trigger-based one reacts to what its block's triggers watch,
+                # kept on the coordinator. Only those parts: the block also holds
+                # the other entities defined next to it.
+                block = getattr(getattr(entity, "coordinator", None), "config", None)
+                if isinstance(block, Mapping):
+                    config = [
+                        config,
+                        {k: block[k] for k in _TRIGGER_KEYS if k in block},
+                    ]
+                if config is not None:
                     configs[entity_id] = config
         for doc in docs.values():
             if doc.kind != KIND_ENTITY:
@@ -909,7 +967,10 @@ class NotesVault:
         exclude = set(opts[CONF_EXCLUDE_INTEGRATIONS])
         wanted_child: dict[str, bool] = {}
         for doc in list(docs.values()):
-            for domain in self._integration_parents(doc):
+            domains = self._integration_parents(doc)
+            if doc.kind == KIND_ENTITY and doc.managed["domain"] in DOMAIN_FOLDERS:
+                domains = [*domains, *(doc.managed.get("integrations") or [])]
+            for domain in domains:
                 wanted_child[domain] = wanted_child.get(domain, False) or doc.wanted
         for domain, has_wanted in wanted_child.items():
             name = self._integration_name(domain)
@@ -1097,6 +1158,7 @@ class NotesVault:
             if m["domain"] in DOMAIN_FOLDERS:
                 m["devices"] = links(KIND_DEVICE, m.get("devices") or [])
                 m["areas"] = links(KIND_AREA, m.get("areas") or [])
+                m["integrations"] = links(KIND_INTEGRATION, m.get("integrations") or [])
         for doc in docs.values():
             if doc.kind == KIND_DEVICE:
                 doc.managed["entities"] = sorted(entities_by_device.get(doc.ha_id, []))
@@ -1780,7 +1842,12 @@ class NotesVault:
             sections.setdefault(section, []).append((label, path))
         return sections
 
-    def _render_index(self, sections: dict[str, list[tuple[str, str]]]) -> str:
+    def _render_index(
+        self,
+        sections: dict[str, list[tuple[str, str]]],
+        views: list[str] | None = None,
+        templates: list[str] | None = None,
+    ) -> str:
         lines = [
             "# Notes index",
             "",
@@ -1789,6 +1856,16 @@ class NotesVault:
             "changes, so edits here are lost.",
         ]
         header = len(lines)
+        # Where to go from here: the views and the templates, which nothing else
+        # links and would otherwise float on their own in the graph.
+        nav: list[str] = []
+        for title, paths in (("Views", views or []), ("Templates", templates or [])):
+            if paths:
+                links = " · ".join(
+                    wikilink(p, PurePosixPath(link_target(p)).name)
+                    for p in sorted(paths)
+                )
+                nav += ["", f"**{title}:** {links}"]
 
         def items(entries: list[tuple[str, str]]) -> list[str]:
             ordered = sorted(entries, key=lambda e: (e[0].lower(), e[1]))
@@ -1813,11 +1890,18 @@ class NotesVault:
                 lines += ["", f"## {section}", "", *items(sections[section])]
         if len(lines) == header:
             lines += ["", "Nothing written yet."]
+        lines[header:header] = nav
         return render_note({"ha_type": "index"}, "\n".join(lines) + "\n")
 
     def _write_index(self) -> None:
         """Write the index, only when it changed. Runs in the executor."""
-        text = self._render_index(self._index_entries())
+        views = [p for p in self.view_note_paths if self.vault.exists(p)]
+        templates = (
+            list(self.vault.iter_markdown(self.templates_folder))
+            if self.vault.exists(self.templates_folder)
+            else []
+        )
+        text = self._render_index(self._index_entries(), views, templates)
         try:
             if self.vault.read_text(self.index_path) == text:
                 return

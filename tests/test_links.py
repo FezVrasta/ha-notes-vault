@@ -187,3 +187,74 @@ async def test_no_integration_note(
     """Integration notes can be turned off, and an excluded integration gets none."""
     await manager.async_sync()
     assert not (vault_dir / f"{BASE}/Integrations/Philips Hue.md").exists()
+
+
+async def test_trigger_template_links_what_triggers_it(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """A trigger-based template links what its trigger watches.
+
+    With no registry entry, it still hangs off the Template integration.
+    """
+    assert await async_setup_component(
+        hass,
+        "template",
+        {
+            "template": [
+                {
+                    "triggers": [
+                        {"trigger": "state", "entity_id": "light.kitchen_ceiling"}
+                    ],
+                    "sensor": [{"name": "Lamp last changed", "state": "{{ now() }}"}],
+                }
+            ]
+        },
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set("light.kitchen_ceiling", "off")
+    await hass.async_block_till_done()
+    await manager.async_sync()
+
+    sensor = frontmatter(vault_dir, f"{BASE}/Entities/sensor.lamp_last_changed")
+    assert sensor["entities"] == [LAMP]
+    assert sensor["integration"] == "template"
+    template = frontmatter(vault_dir, f"{BASE}/Integrations/Template")
+    assert template["entities"] == [
+        f"[[{BASE}/Entities/sensor.lamp_last_changed|Lamp last changed]]"
+    ]
+
+
+async def test_automation_links_the_integrations_it_calls(
+    hass: HomeAssistant, home: dict, manager: NotesVault, vault_dir: Path
+) -> None:
+    """An automation calling an integration without entities links its note."""
+    assert await async_setup_component(
+        hass, "shell_command", {"shell_command": {"refresh": "true"}}
+    )
+    assert await async_setup_component(
+        hass,
+        "automation",
+        {
+            "automation": {
+                "id": "refresh",
+                "alias": "Refresh",
+                "triggers": [{"trigger": "event", "event_type": "refresh"}],
+                "actions": [
+                    {"action": "shell_command.refresh"},
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.kitchen_ceiling"},
+                    },
+                ],
+            }
+        },
+    )
+    await hass.async_block_till_done()
+    await manager.async_sync()
+
+    auto = frontmatter(vault_dir, f"{BASE}/Automations/automation.refresh")
+    # The light is linked as an entity; only the shell command needs its integration.
+    assert auto["integrations"] == [
+        f"[[{BASE}/Integrations/Shell Command|Shell Command]]"
+    ]
+    assert (vault_dir / f"{BASE}/Integrations/Shell Command.md").is_file()

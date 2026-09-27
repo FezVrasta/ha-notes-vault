@@ -148,7 +148,7 @@ Bulb is an E27, 2700K. Replaced 2026-01-10.
 - **Everything is linked.** Entities to their device and area, devices to their area and integration, automations, scripts and scenes to everything they touch (templates included), and helpers to what they're built from. A helper left on its own in the graph is one nothing uses.
 - **Renames follow.** Renaming an entity ID renames its note and rewrites every link to it.
 - **Removing something keeps what you wrote.** Its note stays, marked `ha_removed: true`. Only notes nobody wrote in are deleted.
-- **`Index.md` lists every note with something written in it**, the quickest way to see what you or an assistant have written down. It's regenerated; don't edit it.
+- **`Index.md` lists every note with something written in it**, the quickest way to see what you or an assistant have written down, and links the views and templates at the top. It's regenerated; don't edit it.
 - **Everything outside `Home Assistant/` is yours** and never touched.
 - **Nothing is lost by accident.** Deleted notes and folders go to `.trash/`, the same folder Obsidian uses, and stay there for 30 days. So does the old version of anything an assistant replaces. A save based on an outdated version (you had the note open while an assistant or Obsidian changed it) is refused instead of overwriting the newer change.
 
