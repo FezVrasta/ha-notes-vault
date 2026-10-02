@@ -74,7 +74,7 @@ class FileInfo:
 
 def safe_name(name: str) -> str:
     """Turn a display name into something usable as an Obsidian file name."""
-    cleaned = _UNSAFE_NAME.sub(" ", name)
+    cleaned = _UNSAFE_NAME.sub(" ", str(name))
     cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(".")
     return cleaned or "Unnamed"
 
