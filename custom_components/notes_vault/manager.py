@@ -177,6 +177,18 @@ def _primary_device(members: list[dr.DeviceEntry]) -> dr.DeviceEntry:
     return min(named or members, key=lambda m: m.id)
 
 
+def _device_entry_ids(device: dr.DeviceEntry) -> set[str]:
+    """Config entries a device belongs to.
+
+    Since 2026.10 a device belongs to one config entry, in config_entry_id, and
+    reading config_entries logs a deprecation warning. Older cores only have
+    config_entries.
+    """
+    if (entry_id := getattr(device, "config_entry_id", None)) is not None:
+        return {entry_id}
+    return device.config_entries
+
+
 def _digest(text: str) -> str:
     return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
 
@@ -678,7 +690,7 @@ class NotesVault:
                 {
                     entry.domain
                     for member in members
-                    for entry_id in member.config_entries
+                    for entry_id in _device_entry_ids(member)
                     if (entry := self.hass.config_entries.async_get_entry(entry_id))
                 }
             )

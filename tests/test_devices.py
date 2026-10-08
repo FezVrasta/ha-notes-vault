@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import attr
+import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -202,3 +203,19 @@ async def test_kept_note_on_skipped_device_is_writable(
     note = parse_note((vault_dir / f"{DEVICES}/Alarmo.md").read_text())
     assert note.body.strip() == "Arms when both are out.\n\nNo siren."
     assert note.frontmatter["ha_type"] == "device"
+
+
+async def test_sync_does_not_read_deprecated_config_entries(
+    hass: HomeAssistant,
+    manager: NotesVault,
+    vault_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """2026.10 deprecates DeviceEntry.config_entries; the sync reads config_entry_id."""
+    entry = _entry(hass, "esphome")
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("esphome", "q")}, name="Plug"
+    )
+    await manager.async_sync()
+    assert (vault_dir / f"{DEVICES}/Plug.md").exists()
+    assert "DeviceEntry.config_entries" not in caplog.text
