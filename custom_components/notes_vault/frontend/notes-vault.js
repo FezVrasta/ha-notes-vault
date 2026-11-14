@@ -12,7 +12,7 @@
  * that spot, nothing breaks.
  *
  * Everything visible is a stock Home Assistant element (ha-card, ha-expansion-panel,
- * ha-markdown, ha-form, ha-button, ha-icon-button, ha-list, ha-input-search,
+ * ha-markdown, ha-form, ha-button, ha-icon-button, ha-input-search,
  * ha-top-app-bar-fixed, ha-spinner, ha-alert), except the editor: CodeMirror with an
  * Obsidian-style live preview, in editor.js, loaded the first time a note is edited.
  * Its source and build are in frontend-src/.
@@ -146,8 +146,30 @@ const STYLE = `
   .card-actions .spacer, .actions .spacer { flex: 1; }
   ha-spinner { align-self: center; }
   ha-card + ha-card { margin-top: 16px; }
-  ha-list { --mdc-list-vertical-padding: 0; }
+  .rows { display: flex; flex-direction: column; padding: 4px 0; }
+  .row {
+    display: flex; align-items: center; gap: 16px; width: 100%; box-sizing: border-box;
+    min-height: 48px; padding: 8px 16px; border: none; background: none; cursor: pointer;
+    font: inherit; color: var(--primary-text-color); text-align: left;
+  }
+  .row:hover, .row:focus-visible { background: var(--secondary-background-color); outline: none; }
+  .row.active { background: rgba(var(--rgb-primary-color), 0.12); color: var(--primary-color); }
+  .row ha-icon { flex: none; color: var(--secondary-text-color); }
+  .row.active ha-icon { color: var(--primary-color); }
+  .row .text { display: flex; flex-direction: column; min-width: 0; }
+  .row .text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sub { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); }
 `;
+
+/**
+ * One clickable list row. Built from plain elements: Home Assistant's own list items
+ * are internal and 2026.11 stopped registering `ha-list-item`.
+ */
+const row = ({ attrs, icon, label, sub, active, indent = 0 }) => `
+  <button type="button" class="row${active ? " active" : ""}" ${attrs}${indent ? ` style="padding-left: ${16 + indent * 20}px"` : ""}>
+    ${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}
+    <span class="text"><span>${label}</span>${sub != null ? `<span class="sub">${sub}</span>` : ""}</span>
+  </button>`;
 
 const NOTE_FIELD = { name: "note", selector: { text: { multiline: true } } };
 const BLANK = "__blank__";
@@ -756,17 +778,15 @@ class NotesVaultNote extends HTMLElement {
     if (inPanel && s.backlinks?.length && (!s.editing || this._autosaves)) {
       backlinks = `
         <ha-card header="Linked mentions">
-          <ha-list>
-            ${s.backlinks
-              .map(
-                (b) => `
-              <ha-list-item twoline data-open="${escapeHtml(b.path)}">
-                <span>${escapeHtml(b.name || fileName(b.path))}</span>
-                <span slot="secondary">${escapeHtml(b.snippet)}</span>
-              </ha-list-item>`,
+          <div class="rows">${s.backlinks
+              .map((b) =>
+                row({
+                  attrs: `data-open="${escapeHtml(b.path)}"`,
+                  label: escapeHtml(b.name || fileName(b.path)),
+                  sub: escapeHtml(b.snippet),
+                }),
               )
-              .join("")}
-          </ha-list>
+              .join("")}</div>
         </ha-card>`;
     }
 
@@ -840,7 +860,19 @@ const PANEL_STYLE = `
   .card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .card-actions .spacer { flex: 1; }
   ha-alert { display: block; margin-top: 8px; }
-  ha-list-item { --mdc-list-item-graphic-margin: 16px; }
+  .rows { display: flex; flex-direction: column; padding: 4px 0; }
+  .row {
+    display: flex; align-items: center; gap: 16px; width: 100%; box-sizing: border-box;
+    min-height: 48px; padding: 8px 16px; border: none; background: none; cursor: pointer;
+    font: inherit; color: var(--primary-text-color); text-align: left;
+  }
+  .row:hover, .row:focus-visible { background: var(--secondary-background-color); outline: none; }
+  .row.active { background: rgba(var(--rgb-primary-color), 0.12); color: var(--primary-color); }
+  .row ha-icon { flex: none; color: var(--secondary-text-color); }
+  .row.active ha-icon { color: var(--primary-color); }
+  .row .text { display: flex; flex-direction: column; min-width: 0; }
+  .row .text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sub { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); }
 `;
 
 const parentOf = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
@@ -1272,20 +1304,21 @@ class NotesVaultPanel extends HTMLElement {
     }
     if (this._results) {
       list.innerHTML = this._results.length
-        ? `<ha-list>${this._results
-            .map(
-              (r) => `
-            <ha-list-item twoline graphic="icon" data-file="${escapeHtml(r.path)}" ${r.path === this._path ? "activated" : ""}>
-              <ha-icon slot="graphic" icon="mdi:file-document-outline"></ha-icon>
-              <span>${escapeHtml(this._displayName(r.path))}</span>
-              <span slot="secondary">${escapeHtml(r.snippet || r.path)}</span>
-            </ha-list-item>`,
+        ? `<div class="rows">${this._results
+            .map((r) =>
+              row({
+                attrs: `data-file="${escapeHtml(r.path)}"`,
+                icon: "mdi:file-document-outline",
+                label: escapeHtml(this._displayName(r.path)),
+                sub: escapeHtml(r.snippet || r.path),
+                active: r.path === this._path,
+              }),
             )
-            .join("")}</ha-list>`
+            .join("")}</div>`
         : `<div class="empty">No notes match.</div>`;
       return;
     }
-    list.innerHTML = `<ha-list>${this._treeRows("", 0).join("")}</ha-list>`;
+    list.innerHTML = `<div class="rows">${this._treeRows("", 0).join("")}</div>`;
   }
 
   _displayName(path) {
@@ -1296,24 +1329,31 @@ class NotesVaultPanel extends HTMLElement {
   _treeRows(folder, depth) {
     const folders = this._allFolders().filter((f) => parentOf(f) === folder);
     const files = this._notes.filter((n) => parentOf(n.path) === folder);
-    const indent = `style="--mdc-list-side-padding-left: ${16 + depth * 20}px"`;
     const rows = [];
     for (const full of folders) {
       const open = this._expanded.has(full);
-      rows.push(`
-        <ha-list-item graphic="icon" data-folder="${escapeHtml(full)}" ${indent} ${full === this._folder ? "activated" : ""}>
-          <ha-icon slot="graphic" icon="${open ? "mdi:folder-open-outline" : "mdi:folder-outline"}"></ha-icon>
-          ${escapeHtml(baseName(full))}
-        </ha-list-item>`);
+      rows.push(
+        row({
+          attrs: `data-folder="${escapeHtml(full)}"`,
+          icon: open ? "mdi:folder-open-outline" : "mdi:folder-outline",
+          label: escapeHtml(baseName(full)),
+          active: full === this._folder,
+          indent: depth,
+        }),
+      );
       if (open) rows.push(...this._treeRows(full, depth + 1));
     }
     const label = (n) => n.name || fileName(n.path);
     for (const note of files.sort((a, b) => label(a).localeCompare(label(b)))) {
-      rows.push(`
-        <ha-list-item graphic="icon" data-file="${escapeHtml(note.path)}" ${indent} ${note.path === this._path ? "activated" : ""}>
-          <ha-icon slot="graphic" icon="mdi:file-document-outline"></ha-icon>
-          ${escapeHtml(label(note))}
-        </ha-list-item>`);
+      rows.push(
+        row({
+          attrs: `data-file="${escapeHtml(note.path)}"`,
+          icon: "mdi:file-document-outline",
+          label: escapeHtml(label(note)),
+          active: note.path === this._path,
+          indent: depth,
+        }),
+      );
     }
     return rows;
   }
